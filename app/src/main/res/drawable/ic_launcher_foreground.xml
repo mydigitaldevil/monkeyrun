@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Momo the monkey face, centred in the 66dp adaptive-icon safe zone -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp" android:height="108dp"
+    android:viewportWidth="108" android:viewportHeight="108">
+    <!-- ears -->
+    <path android:fillColor="#8D5524" android:pathData="M30,54 m-10,0 a10,10 0 1,0 20,0 a10,10 0 1,0 -20,0" />
+    <path android:fillColor="#F1C27D" android:pathData="M30,54 m-6,0 a6,6 0 1,0 12,0 a6,6 0 1,0 -12,0" />
+    <path android:fillColor="#8D5524" android:pathData="M78,54 m-10,0 a10,10 0 1,0 20,0 a10,10 0 1,0 -20,0" />
+    <path android:fillColor="#F1C27D" android:pathData="M78,54 m-6,0 a6,6 0 1,0 12,0 a6,6 0 1,0 -12,0" />
+    <!-- head -->
+    <path android:fillColor="#8D5524" android:pathData="M54,54 m-24,0 a24,24 0 1,0 48,0 a24,24 0 1,0 -48,0" />
+    <!-- face -->
+    <path android:fillColor="#F1C27D" android:pathData="M54,60 m-17,0 a17,14 0 1,0 34,0 a17,14 0 1,0 -34,0" />
+    <path android:fillColor="#F1C27D" android:pathData="M46,48 m-8,0 a8,9 0 1,0 16,0 a8,9 0 1,0 -16,0" />
+    <path android:fillColor="#F1C27D" android:pathData="M62,48 m-8,0 a8,9 0 1,0 16,0 a8,9 0 1,0 -16,0" />
+    <!-- eyes -->
+    <path android:fillColor="#1A1A1A" android:pathData="M47,49 m-3,0 a3,3.5 0 1,0 6,0 a3,3.5 0 1,0 -6,0" />
+    <path android:fillColor="#1A1A1A" android:pathData="M61,49 m-3,0 a3,3.5 0 1,0 6,0 a3,3.5 0 1,0 -6,0" />
+    <path android:fillColor="#FFFFFF" android:pathData="M48,48 m-1,0 a1,1 0 1,0 2,0 a1,1 0 1,0 -2,0" />
+    <path android:fillColor="#FFFFFF" android:pathData="M62,48 m-1,0 a1,1 0 1,0 2,0 a1,1 0 1,0 -2,0" />
+    <!-- nose + smile -->
+    <path android:fillColor="#5D3A1A" android:pathData="M51,58 a1.5,1.5 0 1,0 3,0 a1.5,1.5 0 1,0 -3,0 M55,58 a1.5,1.5 0 1,0 3,0 a1.5,1.5 0 1,0 -3,0" />
+    <path android:strokeColor="#5D3A1A" android:strokeWidth="2.5" android:strokeLineCap="round" android:fillColor="#00000000"
+        android:pathData="M45,64 Q54,72 63,64" />
+    <!-- banana -->
+    <path android:fillColor="#FFD93B" android:pathData="M70,74 Q84,72 86,58 Q88,70 74,80 Z" />
+</vector>

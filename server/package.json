@@ -1,0 +1,17 @@
+{
+  "name": "jungle-run-server",
+  "version": "1.0.0",
+  "description": "Room/matchmaking relay for Jungle Run online multiplayer",
+  "main": "index.js",
+  "private": true,
+  "scripts": {
+    "start": "node index.js",
+    "test": "node test.js"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "ws": "8.18.0"
+  }
+}
