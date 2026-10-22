@@ -41,11 +41,14 @@ fun renderScene(out: File, animalId: String, w: Int, h: Int, seconds: Float, coa
     ImageIO.write(img, "png", out)
 }
 
+/** Renders all previews into the given folder (default: preview/build/previews). */
 fun main(args: Array<String>) {
     val dir = File(args.getOrElse(0) { "build/previews" })
-    renderScene(File(dir, "monkey_land.png"), "monkey", 1600, 720, 6.2f)
-    renderScene(File(dir, "monkey_port.png"), "monkey", 720, 1560, 9f)
+    renderCharacterSheet(File(dir, "characters.png"))
     renderScene(File(dir, "tutorial.png"), "monkey", 1600, 720, 20f, CoachLevel.TUTORIAL, waitForHint = true)
-    for (a in listOf("lion", "rabbit", "panda", "bear", "elephant")) renderScene(File(dir, "${a}_land.png"), a, 1600, 720, 11f)
-    println("ok")
+    renderScene(File(dir, "portrait.png"), "monkey", 720, 1560, 9f)
+    for (a in listOf("monkey", "lion", "rabbit", "panda", "bear", "elephant", "cheetah", "giraffe")) {
+        renderScene(File(dir, "${a}.png"), a, 1600, 720, 11f)
+    }
+    println("Previews written to ${dir.absolutePath}")
 }

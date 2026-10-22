@@ -35,8 +35,3 @@ fun renderCharacterSheet(out: File) {
     ImageIO.write(img, "png", out)
 }
 
-fun main(args: Array<String>) {
-    val dir = File(args.getOrElse(0) { "build/previews" })
-    renderCharacterSheet(File(dir, "characters.png"))
-    println("wrote ${dir.absolutePath}")
-}

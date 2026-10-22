@@ -23,10 +23,12 @@ jobs:
         with:
           name: jungle-run-debug-apk
           path: app/build/outputs/apk/debug/*.apk
+      - name: Render art previews
+        run: ./gradlew --no-daemon :preview:run
       - uses: actions/upload-artifact@v4
         with:
           name: art-previews
-          path: app/build/previews/*.png
+          path: preview/build/previews/*.png
 
   server:
     runs-on: ubuntu-latest

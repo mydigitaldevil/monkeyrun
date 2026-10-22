@@ -14,3 +14,5 @@ dependencyResolutionManagement {
 }
 rootProject.name = "JungleRun"
 include(":app")
+// Desktop tool that renders the game art to PNG (no device needed): ./gradlew :preview:run
+include(":preview")
