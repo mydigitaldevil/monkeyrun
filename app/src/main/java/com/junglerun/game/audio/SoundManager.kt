@@ -33,7 +33,7 @@ class SoundManager(private val context: Context) : FeedbackSink {
                 .build(),
         )
         .build()
-    private val ids = HashMap<FeedbackEvent, Int>()
+    private val ids = java.util.concurrent.ConcurrentHashMap<FeedbackEvent, Int>()
     private var music: MediaPlayer? = null
     private val vibrator: Vibrator? = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
         (context.getSystemService(Context.VIBRATOR_MANAGER_SERVICE) as? VibratorManager)?.defaultVibrator
@@ -236,10 +236,13 @@ class SoundManager(private val context: Context) : FeedbackSink {
             putShort(2); putShort(16)
             put("data".toByteArray()); putInt(data.capacity())
         }
-        FileOutputStream(file).use {
+        // Write then rename, so a reader never sees a half-written file.
+        val tmp = File(file.parentFile, file.name + ".tmp")
+        FileOutputStream(tmp).use {
             it.write(header.array())
             it.write(data.array())
         }
+        tmp.renameTo(file)
     }
 
     fun release() {
