@@ -146,6 +146,22 @@ class Java2DGfx(private val g: Graphics2D) : Gfx {
     override fun textWidth(s: String, size: Float, bold: Boolean): Float =
         if (s.isEmpty()) 0f else TextLayout(s, font(size, bold), g.fontRenderContext).advance
 
+    private val images = HashMap<String, java.awt.image.BufferedImage>()
+
+    override fun cached(key: String, w: Int, h: Int, l: Float, t: Float, r: Float, b: Float, render: (Gfx) -> Unit) {
+        if (w <= 0 || h <= 0) return
+        val img = images.getOrPut(key) {
+            java.awt.image.BufferedImage(w, h, java.awt.image.BufferedImage.TYPE_INT_ARGB).also { im ->
+                val g2 = im.createGraphics()
+                render(Java2DGfx(g2))
+                g2.dispose()
+            }
+        }
+        g.composite = AlphaComposite.getInstance(AlphaComposite.SRC_OVER, alpha.coerceIn(0f, 1f))
+        g.setRenderingHint(RenderingHints.KEY_INTERPOLATION, RenderingHints.VALUE_INTERPOLATION_BILINEAR)
+        g.drawImage(img, l.toInt(), t.toInt(), (r - l).toInt(), (b - t).toInt(), null)
+    }
+
     private fun toPath(p: GPath): Path2D.Float {
         val path = Path2D.Float()
         val cs = p.coords

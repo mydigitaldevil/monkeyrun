@@ -59,6 +59,7 @@ class Box(var l: Float = 0f, var t: Float = 0f, var r: Float = 0f, var b: Float 
 class GameRenderer {
     private val chars = CharacterArt()
     private val world = WorldArt()
+    private val scenery = com.junglerun.game.art.Scenery()
     private val v = View()
     private val p = GPath()
     private val tmp = Box()
@@ -115,7 +116,7 @@ class GameRenderer {
 
         g.save()
         g.clipRect(vp.l, vp.t, vp.r, vp.b)
-        world.background(g, th, w.biome, v, w.distance)
+        scenery.drawBackground(g, th, w.biome, v, w.distance)
 
         var n = 0
         for (h in w.hazards) {
@@ -127,7 +128,19 @@ class GameRenderer {
             pits[n * 2 + 1] = r
             n++
         }
-        world.ground(g, th, w.biome, v, pits, n)
+        // Ground tile, clipped so it doesn't cover the gaps; then the water/holes in the gaps
+        sortPits(n)
+        var segL = vp.l
+        for (k in 0..n) {
+            val segR = if (k < n) pits[k * 2] else vp.r
+            if (segR > segL) {
+                g.save(); g.clipRect(segL, v.groundY - 6f * v.s, segR, vp.b)
+                scenery.groundTile(g, th, w.biome, v)
+                g.restore()
+            }
+            if (k < n) segL = pits[k * 2 + 1]
+        }
+        world.drawPits(g, th, w.biome, v, pits, n)
         if (w.biome == Biome.RIVERBANK) {
             for (h in w.hazards) if (h.kind == HazardKind.PIT && h.variant == 0) world.crocEyes(g, v, v.sx(h.x + h.w / 2f))
         }
@@ -138,11 +151,24 @@ class GameRenderer {
         drawChaser(g, w)
         drawRunner(g, w)
         drawParticles(g, w)
+        scenery.drawForeground(g, th, w.biome, v, w.distance)
         if (style.showHud) {
             drawHint(g, w, vp)
             drawHud(g, w, vp, style)
         }
         g.restore()
+    }
+
+    private fun sortPits(n: Int) {
+        for (i in 1 until n) {
+            var j = i
+            while (j > 0 && pits[(j - 1) * 2] > pits[j * 2]) {
+                val l = pits[j * 2]; val r = pits[j * 2 + 1]
+                pits[j * 2] = pits[(j - 1) * 2]; pits[j * 2 + 1] = pits[(j - 1) * 2 + 1]
+                pits[(j - 1) * 2] = l; pits[(j - 1) * 2 + 1] = r
+                j--
+            }
+        }
     }
 
     // ------------------------------------------------------------------ hazards

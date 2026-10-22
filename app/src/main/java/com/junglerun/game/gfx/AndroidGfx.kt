@@ -1,5 +1,6 @@
 package com.junglerun.game.gfx
 
+import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.graphics.LinearGradient
 import android.graphics.Paint
@@ -11,6 +12,10 @@ import android.graphics.Typeface
 
 /** [Gfx] backed by an Android [Canvas]. Reuses paints/paths so drawing allocates nothing per frame. */
 class AndroidGfx : Gfx {
+    companion object {
+        private const val MAX_CACHED = 14
+    }
+
     var canvas: Canvas? = null
     private val c: Canvas get() = canvas!!
 
@@ -29,6 +34,14 @@ class AndroidGfx : Gfx {
     }
     private val path = Path()
     private val rect = RectF()
+    private val bitmapPaint = Paint(Paint.FILTER_BITMAP_FLAG or Paint.ANTI_ALIAS_FLAG)
+    private val bitmaps = object : LinkedHashMap<String, Bitmap>(16, 0.75f, true) {
+        override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, Bitmap>?): Boolean {
+            val evict = size > MAX_CACHED
+            if (evict) eldest?.value?.recycle()
+            return evict
+        }
+    }
 
     private val alphaStack = FloatArray(64)
     private var depth = 0
@@ -162,6 +175,19 @@ class AndroidGfx : Gfx {
         textPaint.typeface = if (bold) roundedFace else Typeface.DEFAULT
         textPaint.textSize = size
         return textPaint.measureText(s)
+    }
+
+    override fun cached(key: String, w: Int, h: Int, l: Float, t: Float, r: Float, b: Float, render: (Gfx) -> Unit) {
+        if (w <= 0 || h <= 0) return
+        val bmp = bitmaps[key] ?: Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888).also { bmp ->
+            val sub = AndroidGfx()
+            sub.begin(Canvas(bmp))
+            render(sub)
+            bitmaps[key] = bmp
+        }
+        rect.set(l, t, r, b)
+        bitmapPaint.alpha = (255 * alpha).toInt()
+        c.drawBitmap(bmp, null, rect, bitmapPaint)
     }
 
     private fun toPath(p: GPath): Path {

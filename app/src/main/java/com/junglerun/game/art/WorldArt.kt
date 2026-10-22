@@ -333,7 +333,10 @@ class WorldArt {
         p.close()
         g.fillPath(p, 0, grass)
 
-        // Pits / rivers
+        drawPits(g, th, biome, v, pits, pitCount)
+    }
+
+    fun drawPits(g: Gfx, th: Theme, biome: Biome, v: View, pits: FloatArray, pitCount: Int) {
         for (n in 0 until pitCount) {
             val l = pits[n * 2]
             val r = pits[n * 2 + 1]
@@ -346,23 +349,31 @@ class WorldArt {
         val water = biome == Biome.JUNGLE || biome == Biome.RIVERBANK || biome == Biome.BAMBOO_FOREST || biome == Biome.PINE_FOREST
         val top = v.groundY - 0.3f * s
         if (water) {
+            val deep = Colors.mix(th.water, 0xFF04263A.toInt(), 0.55f)
             val wg = grad("water-${biome.name}-${v.groundY}-${v.bottom}") {
-                Gradient.linear(0f, v.groundY, 0f, v.bottom, intArrayOf(th.waterLight, th.water, Colors.shade(th.water, 0.6f)), floatArrayOf(0f, 0.3f, 1f))
+                Gradient.linear(0f, v.groundY + 2f * v.s, 0f, v.bottom, intArrayOf(Colors.mix(th.waterLight, th.water, 0.4f), th.water, deep), floatArrayOf(0f, 0.25f, 1f))
             }
-            g.fillRect(l, top, r, v.bottom, Colors.shade(th.dirtDark, 0.8f))
-            g.fillRect(l + 0.4f * s, v.groundY + 2.2f * s, r - 0.4f * s, v.bottom, 0, wg)
-            // waves
+            g.fillRect(l, top, r, v.bottom, Colors.shade(th.dirtDark, 0.7f))
+            g.fillRect(l + 0.5f * s, v.groundY + 2.4f * s, r - 0.5f * s, v.bottom, 0, wg)
+            // surface band + shimmering reflections
+            g.fillRect(l + 0.5f * s, v.groundY + 2.4f * s, r - 0.5f * s, v.groundY + 3.2f * s, Colors.withAlpha(0xFFFFFFFF.toInt(), 0.35f))
             val t = v.time
-            var wx = l + 1f * s
             var k = 0
-            while (wx < r - 2f * s) {
-                val wy = v.groundY + (3.4f + sin(t * 2.5f + k)) * s
-                g.strokeLine(wx, wy, wx + 2f * s, wy, 0.35f * s, Colors.withAlpha(0xFFFFFFFF.toInt(), 0.65f))
-                wx += 4.5f * s
+            var wy = v.groundY + 4.4f * s
+            while (wy < v.bottom - 1f * s && k < 8) {
+                val shift = ((t * 6f + k * 13f) % 7f) * s
+                var wx = l + 1f * s + shift
+                while (wx < r - 2f * s) {
+                    g.strokeLine(wx, wy, min(r - 1f * s, wx + (1.2f + (k % 3)) * s), wy, 0.28f * s, Colors.withAlpha(0xFFFFFFFF.toInt(), 0.45f - k * 0.05f))
+                    wx += 6.5f * s
+                }
+                wy += 2.6f * s
                 k++
             }
-            g.fillOval(l, v.groundY + 1.6f * s, l + 2.2f * s, v.groundY + 2.8f * s, 0xCCFFFFFF.toInt())
-            g.fillOval(r - 2.2f * s, v.groundY + 1.6f * s, r, v.groundY + 2.8f * s, 0xCCFFFFFF.toInt())
+            // splash foam at the banks
+            for (e in floatArrayOf(l + 0.8f * s, r - 0.8f * s)) {
+                g.fillOval(e - 1.6f * s, v.groundY + 2f * s, e + 1.6f * s, v.groundY + 3.4f * s, 0xDDFFFFFF.toInt())
+            }
         } else {
             val hole = grad("hole-${biome.name}-${v.groundY}-${v.bottom}") {
                 Gradient.linear(0f, v.groundY, 0f, v.groundY + 10f * v.s, intArrayOf(th.dirtDark, 0xFF1A0F0A.toInt()), null)

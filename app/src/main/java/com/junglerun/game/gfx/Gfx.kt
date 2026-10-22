@@ -37,6 +37,13 @@ interface Gfx {
     )
 
     fun textWidth(s: String, size: Float, bold: Boolean = true): Float
+
+    /**
+     * Draws an offscreen image of [w]×[h] pixels into the rectangle (l, t, r, b). [render] paints the
+     * image (in its own pixel space) only when [key] is not cached yet — used for richly detailed
+     * background layers that would be too expensive to redraw every frame.
+     */
+    fun cached(key: String, w: Int, h: Int, l: Float, t: Float, r: Float, b: Float, render: (Gfx) -> Unit)
 }
 
 enum class Align { LEFT, CENTER, RIGHT }

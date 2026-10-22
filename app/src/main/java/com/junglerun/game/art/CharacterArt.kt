@@ -39,17 +39,21 @@ class Look(
     val blush: Int = 0x66FF7F9A,
     val headScale: Float = 1f,
     val sparkle: Boolean = false,
+    /** Fluffy fur edge on head/body (off for smooth-skinned animals). */
+    val furry: Boolean = true,
+    val iris: Int = 0xFF7A4A24.toInt(),
 ) {
-    val outline: Int = Colors.mix(Colors.shade(body, 0.32f), 0xFF2A1A12.toInt(), 0.45f)
+    val outline: Int = Colors.withAlpha(Colors.mix(Colors.shade(body, 0.45f), 0xFF2A1A12.toInt(), 0.3f), 0.85f)
     val bodyDark: Int = Colors.shade(body, 0.78f)
     val limbDark: Int = Colors.shade(limbs, 0.75f)
     val headR = 3.5f * headScale
 
     // Cached gradients (local space, never change)
-    val headGrad = Gradient.radial(-headR * 0.35f, -headR * 0.45f, headR * 1.45f,
-        intArrayOf(Colors.lighten(body, 0.35f), body, Colors.shade(body, 0.8f)), floatArrayOf(0f, 0.55f, 1f))
-    val bodyGrad = Gradient.radial(-1.2f, -1.4f, 4.6f,
-        intArrayOf(Colors.lighten(body, 0.3f), body, Colors.shade(body, 0.78f)), floatArrayOf(0f, 0.5f, 1f))
+    val headGrad = Gradient.radial(-headR * 0.38f, -headR * 0.5f, headR * 1.55f,
+        intArrayOf(Colors.lighten(body, 0.42f), body, Colors.shade(body, 0.66f)), floatArrayOf(0f, 0.5f, 1f))
+    val bodyGrad = Gradient.radial(-1.3f, -1.6f, 5f,
+        intArrayOf(Colors.lighten(body, 0.36f), body, Colors.shade(body, 0.64f)), floatArrayOf(0f, 0.48f, 1f))
+    val irisGrad = Gradient.radial(0f, 0.35f, 1f, intArrayOf(Colors.lighten(iris, 0.45f), iris, Colors.shade(iris, 0.55f)), floatArrayOf(0f, 0.55f, 1f))
     val bellyGrad = Gradient.radial(0f, -0.6f, 2.6f, intArrayOf(Colors.lighten(belly, 0.25f), belly), null)
     val maneGrad = if (mane != 0) Gradient.radial(-0.6f, -0.8f, headR * 1.9f,
         intArrayOf(Colors.lighten(mane, 0.25f), mane, Colors.shade(mane, 0.75f)), floatArrayOf(0f, 0.55f, 1f)) else null
@@ -63,7 +67,7 @@ class Look(
 class CharacterArt {
     private val p = GPath()
     private val q = GPath()
-    private val o = 0.34f // outline width
+    private val o = 0.2f // outline width (soft, 3D-cartoon style)
 
     private val looks = HashMap<Shape, Look>()
     private val golden = Look(0xFFE8A93A.toInt(), 0xFFFFE6A6.toInt(), Ears.MONKEY, Tail.CURLY, biped = true,
@@ -75,17 +79,17 @@ class CharacterArt {
             Shape.MONKEY -> Look(0xFF9A6240.toInt(), 0xFFF3CFA2.toInt(), Ears.MONKEY, Tail.CURLY, biped = true,
                 faceMask = 0xFFFFD9B0.toInt(), tuft = true)
             Shape.RABBIT -> Look(0xFFF3F0FA.toInt(), 0xFFFFFFFF.toInt(), Ears.LONG, Tail.PUFF, biped = true,
-                nose = 0xFFFF7FA0.toInt(), headScale = 1.02f)
+                nose = 0xFFFF7FA0.toInt(), headScale = 1.02f, iris = 0xFFB0475E.toInt())
             Shape.PANDA -> Look(0xFFFAFAFA.toInt(), 0xFFFFFFFF.toInt(), Ears.ROUND_TOP, Tail.SHORT,
                 limbs = 0xFF2B2B33.toInt(), eyePatches = true, nose = 0xFF22222A.toInt())
             Shape.LION -> Look(0xFFF2B54A.toInt(), 0xFFFFE2A8.toInt(), Ears.ROUND_TOP, Tail.TUFT,
-                mane = 0xFFC8662B.toInt(), faceMask = 0xFFFFE6B8.toInt(), nose = 0xFF8A3B2A.toInt())
+                mane = 0xFFC8662B.toInt(), faceMask = 0xFFFFE6B8.toInt(), nose = 0xFF8A3B2A.toInt(), iris = 0xFFB07A1E.toInt())
             Shape.BEAR -> Look(0xFF8A5A3C.toInt(), 0xFFE2B98F.toInt(), Ears.ROUND_TOP, Tail.SHORT,
                 faceMask = 0xFFE9C39A.toInt())
             Shape.ELEPHANT -> Look(0xFF9EB4C8.toInt(), 0xFFD7E3EE.toInt(), Ears.FLAP, Tail.SHORT, trunk = true,
-                earInner = 0xFFF7B6C8.toInt(), nose = 0)
+                earInner = 0xFFF7B6C8.toInt(), nose = 0, furry = false, iris = 0xFF4E6A85.toInt())
             Shape.CHEETAH -> Look(0xFFF6C453.toInt(), 0xFFFFF0C9.toInt(), Ears.ROUND_TOP, Tail.LONG,
-                spots = 0xFF5A3A1E.toInt(), faceMask = 0xFFFFF0CF.toInt())
+                spots = 0xFF5A3A1E.toInt(), faceMask = 0xFFFFF0CF.toInt(), iris = 0xFFC08A1E.toInt())
             Shape.GIRAFFE -> Look(0xFFF7C66A.toInt(), 0xFFFFEBC2.toInt(), Ears.OSSICONE, Tail.TUFT, longNeck = true,
                 spots = 0xFFB86B2E.toInt(), faceMask = 0xFFFFE7C0.toInt(), headScale = 0.9f)
         }
@@ -100,9 +104,9 @@ class CharacterArt {
             Chaser.FOX -> Look(0xFFF07A2A.toInt(), 0xFFFFF4E8.toInt(), Ears.POINTY, Tail.BUSHY,
                 faceMask = 0xFFFFF4E8.toInt(), limbs = 0xFF5B3524.toInt(), blush = 0)
             Chaser.RHINO -> Look(0xFF8E9AA6.toInt(), 0xFFC4CDD6.toInt(), Ears.POINTY, Tail.SHORT, horn = true,
-                headScale = 1.05f, blush = 0, nose = 0)
-            Chaser.BEES -> Look(0xFFFFD23F.toInt(), 0xFFFFE98A.toInt(), Ears.NONE, Tail.NONE, blush = 0)
-            Chaser.CROCODILE -> Look(0xFF5E9B4A.toInt(), 0xFFD7E8A8.toInt(), Ears.NONE, Tail.NONE, blush = 0)
+                headScale = 1.05f, blush = 0, nose = 0, furry = false)
+            Chaser.BEES -> Look(0xFFFFD23F.toInt(), 0xFFFFE98A.toInt(), Ears.NONE, Tail.NONE, blush = 0, furry = false)
+            Chaser.CROCODILE -> Look(0xFF5E9B4A.toInt(), 0xFFD7E8A8.toInt(), Ears.NONE, Tail.NONE, blush = 0, furry = false, iris = 0xFFB8A21E.toInt())
             Chaser.HYENA -> Look(0xFFC9A774.toInt(), 0xFFEBD8B4.toInt(), Ears.POINTY, Tail.BUSHY,
                 spots = 0xFF5B4128.toInt(), faceMask = 0xFFE9D3AA.toInt(), blush = 0)
         }
@@ -180,6 +184,44 @@ class CharacterArt {
         fillOval(cx - rx, cy - ry, cx + rx, cy + ry, color, grad)
     }
 
+    private val fx = FloatArray(28)
+    private val fy = FloatArray(28)
+
+    /** Ellipse with a soft, tufted fur edge, lit by [grad]; plus a rim light on the upper left. */
+    private fun Gfx.fur(cx: Float, cy: Float, rx: Float, ry: Float, color: Int, l: Look, grad: Gradient?) {
+        if (!l.furry) {
+            oOval(cx, cy, rx, ry, color, l.outline, grad)
+            rim(cx, cy, rx, ry)
+            return
+        }
+        val n = 26
+        for (i in 0 until n) {
+            val a = i * 2f * Math.PI.toFloat() / n
+            val k = if (i % 2 == 0) 1.06f else 0.97f
+            fx[i] = cx + cos(a) * rx * k
+            fy[i] = cy + sin(a) * ry * k
+        }
+        q.reset()
+        q.moveTo(fx[0], fy[0])
+        for (i in 0 until n) {
+            val j = (i + 1) % n
+            q.quadTo(fx[i], fy[i], (fx[i] + fx[j]) / 2f, (fy[i] + fy[j]) / 2f)
+        }
+        q.close()
+        strokePath(q, o * 2f, l.outline)
+        fillPath(q, color, grad)
+        rim(cx, cy, rx, ry)
+    }
+
+    private fun Gfx.rim(cx: Float, cy: Float, rx: Float, ry: Float) {
+        strokeArc(cx - rx * 0.86f, cy - ry * 0.86f, cx + rx * 0.86f, cy + ry * 0.86f, 195f, 85f, 0.32f, 0x55FFFFFF)
+    }
+
+    /** Soft contact shadow (ambient occlusion) where two body parts meet. */
+    private fun Gfx.ao(cx: Float, cy: Float, rx: Float, ry: Float) {
+        fillOval(cx - rx, cy - ry, cx + rx, cy + ry, 0x2A000000)
+    }
+
     /** A limb: thick rounded stroke with an outline. */
     private fun Gfx.limb(x1: Float, y1: Float, x2: Float, y2: Float, w: Float, color: Int, outline: Int) {
         strokeLine(x1, y1, x2, y2, w + o * 2, outline)
@@ -222,8 +264,9 @@ class CharacterArt {
 
         // Body
         g.save(); g.translate(-0.1f, -4.3f)
-        g.oOval(0f, 0f, 2.55f, 2.45f, l.body, l.outline, l.bodyGrad)
+        g.fur(0f, 0f, 2.55f, 2.45f, l.body, l, l.bodyGrad)
         g.fillOval(-0.6f, -1.2f, 2.2f, 2.1f, l.belly, l.bellyGrad)
+        g.ao(0.6f, -2.0f, 2.2f, 0.8f)
         g.restore()
 
         // Front leg
@@ -283,7 +326,7 @@ class CharacterArt {
         leg(2.0f, ph + 3.6f, l.limbDark)
         // Body
         g.save(); g.translate(-0.6f, -4.6f)
-        g.oOval(0f, 0f, 3.9f, 2.55f, l.body, l.outline, l.bodyGrad)
+        g.fur(0f, 0f, 3.9f, 2.55f, l.body, l, l.bodyGrad)
         g.fillOval(-2.0f, 0.2f, 2.6f, 2.35f, l.belly, l.bellyGrad)
         if (l.spots != 0) {
             val sx = floatArrayOf(-2.6f, -1.2f, 0.2f, -2.0f, 1.4f, -0.4f)
@@ -392,7 +435,15 @@ class CharacterArt {
         }
 
         // Head shape
-        g.oCircle(0f, 0f, r, l.body, l.outline, l.headGrad)
+        g.fur(0f, 0f, r, r, l.body, l, l.headGrad)
+        if (l.furry) {
+            // a few fur strands on the crown
+            for (i in 0 until 4) {
+                val x = -1.6f + i * 0.9f
+                p.reset().moveTo(x, -r * 0.82f).quadTo(x + 0.25f, -r * 0.62f, x + 0.55f, -r * 0.7f)
+                g.strokePath(p, 0.16f, Colors.withAlpha(Colors.lighten(l.body, 0.45f), 0.6f))
+            }
+        }
         if (l.tuft) {
             p.reset().moveTo(-0.6f, -r + 0.2f).quadTo(-0.2f, -r - 1.4f, 0.9f, -r - 0.9f).quadTo(0.1f, -r - 0.6f, 0.4f, -r + 0.3f).close()
             g.fillPath(p, l.body)
@@ -433,8 +484,8 @@ class CharacterArt {
             g.save(); g.translate(nearX, eyeY + 0.1f); g.rotate(-20f); g.fillOval(-1.15f, -1.4f, 1.15f, 1.4f, l.limbs); g.restore()
             g.save(); g.translate(farX, eyeY + 0.1f); g.rotate(20f); g.fillOval(-0.95f, -1.3f, 0.95f, 1.3f, l.limbs); g.restore()
         }
-        eye(g, nearX, eyeY, 0.92f, mood, blink, angry)
-        eye(g, farX, eyeY - 0.05f, 0.78f, mood, blink, angry)
+        eye(g, nearX, eyeY, 0.92f, mood, blink, angry, l)
+        eye(g, farX, eyeY - 0.05f, 0.78f, mood, blink, angry, l)
         if (angry) {
             g.strokeLine(nearX - 0.9f, eyeY - 1.6f, nearX + 0.9f, eyeY - 0.9f, 0.45f, l.outline)
             g.strokeLine(farX - 0.8f, eyeY - 0.95f, farX + 0.7f, eyeY - 1.55f, 0.45f, l.outline)
@@ -472,8 +523,10 @@ class CharacterArt {
         }
     }
 
-    private fun eye(g: Gfx, x: Float, y: Float, s: Float, mood: Mood, blink: Boolean, angry: Boolean) {
-        val dark = 0xFF2A1A12.toInt()
+    private var irisGrad: Gradient? = null
+
+    private fun eye(g: Gfx, x: Float, y: Float, s: Float, mood: Mood, blink: Boolean, angry: Boolean, l: Look? = null) {
+        val dark = 0xFF24150D.toInt()
         when {
             mood == Mood.HURT -> {
                 g.strokeLine(x - 0.6f * s, y - 0.6f * s, x + 0.6f * s, y + 0.6f * s, 0.35f, dark)
@@ -484,13 +537,25 @@ class CharacterArt {
             }
             else -> {
                 val ry = if (angry) 0.85f * s else 1.2f * s
-                g.fillOval(x - 0.95f * s, y - ry, x + 0.95f * s, y + ry, 0xFFFFFFFF.toInt())
-                val pr = if (mood == Mood.SCARED) 0.45f * s else 0.72f * s
-                val pry = if (mood == Mood.SCARED) 0.55f * s else 0.95f * s
-                g.fillOval(x + 0.2f * s - pr, y + 0.1f * s - pry, x + 0.2f * s + pr, y + 0.1f * s + pry, dark)
-                g.fillCircle(x + 0.42f * s, y - 0.32f * s, 0.3f * s, 0xFFFFFFFF.toInt())
-                g.fillCircle(x - 0.05f * s, y + 0.45f * s, 0.14f * s, 0xDDFFFFFF.toInt())
-                g.strokeOval(x - 0.95f * s, y - ry, x + 0.95f * s, y + ry, 0.22f, dark)
+                val rx = 0.95f * s
+                // sclera with a soft top shadow from the eyelid
+                g.fillOval(x - rx, y - ry, x + rx, y + ry, 0xFFFFFFFF.toInt())
+                g.fillOval(x - rx, y - ry, x + rx, y - ry * 0.35f, 0x22000000)
+                // coloured iris
+                val ir = if (mood == Mood.SCARED) 0.48f * s else 0.74f * s
+                val iry = if (mood == Mood.SCARED) 0.56f * s else 0.92f * s
+                val ix = x + 0.2f * s
+                val iy = y + 0.12f * s
+                g.save(); g.translate(ix, iy); g.scale(ir, iry)
+                g.fillCircle(0f, 0f, 1f, l?.iris ?: 0xFF7A4A24.toInt(), l?.irisGrad)
+                g.restore()
+                g.fillOval(ix - ir * 0.52f, iy - iry * 0.55f, ix + ir * 0.52f, iy + iry * 0.55f, dark)
+                // catch-lights
+                g.fillCircle(x + 0.45f * s, y - 0.34f * s, 0.32f * s, 0xFFFFFFFF.toInt())
+                g.fillCircle(x - 0.08f * s, y + 0.5f * s, 0.14f * s, 0xDDFFFFFF.toInt())
+                g.strokeOval(x - rx, y - ry, x + rx, y + ry, 0.16f, Colors.withAlpha(dark, 0.7f))
+                // upper lash line
+                g.strokeArc(x - rx, y - ry, x + rx, y + ry, 200f, 140f, 0.26f, dark)
             }
         }
     }
@@ -616,7 +681,7 @@ class CharacterArt {
             g.fillPath(p, 0xFFFFFFFF.toInt())
         }
         g.oCircle(0.4f, -1.5f, 0.9f, l.body, l.outline)
-        eye(g, 0.5f, -1.65f, 0.6f, Mood.ANGRY, false, true)
+        eye(g, 0.5f, -1.65f, 0.6f, Mood.ANGRY, false, true, l)
         g.restore()
         g.save(); g.rotate(jaw * 8f)
         g.oOval(1.8f, 0.7f, 2.8f, 0.6f, l.belly, l.outline)
