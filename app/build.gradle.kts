@@ -73,7 +73,7 @@ android {
             if (release.storeFile != null) signingConfig = release
         }
         debug {
-            applicationIdSuffix = ".debug"
+            // No applicationIdSuffix: google-services.json must match the package name exactly.
             versionNameSuffix = "-debug"
         }
     }

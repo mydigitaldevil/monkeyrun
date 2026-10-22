@@ -179,7 +179,7 @@ private class NativeCard(context: Context) {
         val drawable = ad.icon?.drawable
         icon.setImageDrawable(drawable)
         icon.visibility = if (drawable != null) android.view.View.VISIBLE else android.view.View.GONE
-        ad.mediaContent?.let { media.mediaContent = it }
+        ad.mediaContent?.let { media.setMediaContent(it) }
         view.setNativeAd(ad)
     }
 }
