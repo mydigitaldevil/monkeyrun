@@ -52,9 +52,11 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.junglerun.game.core.AnimalSpec
 import com.junglerun.game.core.Food
-import com.junglerun.game.game.AnimalPainter
-import com.junglerun.game.game.GameRenderer
-import com.junglerun.game.game.Pose
+import com.junglerun.game.art.CharacterArt
+import com.junglerun.game.art.Mood
+import com.junglerun.game.art.Pose
+import com.junglerun.game.art.WorldArt
+import com.junglerun.game.gfx.AndroidGfx
 import com.junglerun.game.ui.theme.JungleColors
 
 /** Jungle-themed screen background with a soft vignette. */
@@ -172,32 +174,53 @@ private fun CurrencyChip(icon: String, color: Color, value: String, onAdd: (() -
 
 /** Live, animated, procedurally drawn animal — same art as in-game. */
 @Composable
-fun AnimalPortrait(spec: AnimalSpec, modifier: Modifier = Modifier, locked: Boolean = false, running: Boolean = true) {
-    val painter = remember { AnimalPainter() }
+fun AnimalPortrait(
+    spec: AnimalSpec,
+    modifier: Modifier = Modifier,
+    locked: Boolean = false,
+    running: Boolean = true,
+    mood: Mood = Mood.NORMAL,
+) {
+    val art = remember { CharacterArt() }
+    val gfx = remember { AndroidGfx() }
     val t = rememberInfiniteTransition(label = "run")
     val phase by t.animateFloat(0f, 6.2832f, infiniteRepeatable(tween(650, easing = LinearEasing)), label = "phase")
+    val clock by t.animateFloat(0f, 100f, infiniteRepeatable(tween(100_000, easing = LinearEasing)), label = "clock")
     Canvas(modifier) {
-        val s = size.height / 18f
+        val s = size.height / 19f
         drawIntoCanvas { c ->
-            painter.drawAnimal(
-                c.nativeCanvas, spec.shape,
-                if (locked) 0xFF2B2B2B.toInt() else spec.bodyColor,
-                if (locked) 0xFF444444.toInt() else spec.accentColor,
-                size.width / 2f - s, size.height * 0.95f, s,
-                if (running) phase else 0f,
-                if (running) Pose.RUN else Pose.IDLE,
+            gfx.begin(c.nativeCanvas)
+            art.drawAnimal(
+                gfx, spec.shape, size.width / 2f - s * 0.6f, size.height * 0.94f, s,
+                if (running) phase else clock, if (running) Pose.RUN else Pose.IDLE,
+                mood, clock, golden = spec.id == "golden_monkey", alpha = if (locked) 0.35f else 1f,
             )
+            if (locked) {
+                // padlock badge
+                val r = size.minDimension * 0.16f
+                val cx = size.width / 2f
+                val cy = size.height * 0.55f
+                gfx.fillRoundRect(cx - r, cy - r * 0.2f, cx + r, cy + r * 1.1f, r * 0.25f, 0xFF37474F.toInt())
+                gfx.strokeArc(cx - r * 0.6f, cy - r * 1.1f, cx + r * 0.6f, cy + r * 0.3f, 180f, 180f, r * 0.22f, 0xFF37474F.toInt())
+                gfx.fillCircle(cx, cy + r * 0.4f, r * 0.18f, 0xFFFFD54F.toInt())
+            }
         }
     }
 }
 
-/** Small icon of an animal's food, drawn with the in-game renderer. */
+/** Small icon of an animal's food, drawn with the in-game art. */
 @Composable
 fun FoodIcon(food: Food, modifier: Modifier = Modifier.size(22.dp)) {
-    val renderer = remember { GameRenderer(1f) }
+    val art = remember { WorldArt() }
+    val gfx = remember { AndroidGfx() }
     Canvas(modifier) {
         drawIntoCanvas { c ->
-            renderer.drawFood(c.nativeCanvas, food, size.width / 2f, size.height / 2f, size.minDimension / 3f, 255, false)
+            gfx.begin(c.nativeCanvas)
+            gfx.save()
+            gfx.translate(size.width / 2f, size.height / 2f)
+            gfx.scale(size.minDimension / 2.6f)
+            art.food(gfx, food, false, 0f)
+            gfx.restore()
         }
     }
 }

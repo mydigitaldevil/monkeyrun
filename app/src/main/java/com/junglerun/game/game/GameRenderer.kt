@@ -1,18 +1,20 @@
 package com.junglerun.game.game
 
-import android.graphics.Canvas
-import android.graphics.LinearGradient
-import android.graphics.Paint
-import android.graphics.Path
-import android.graphics.RadialGradient
-import android.graphics.RectF
-import android.graphics.Shader
-import android.graphics.Typeface
+import com.junglerun.game.art.CharacterArt
+import com.junglerun.game.art.Mood
+import com.junglerun.game.art.Pose
+import com.junglerun.game.art.Theme
+import com.junglerun.game.art.View
+import com.junglerun.game.art.WorldArt
 import com.junglerun.game.core.Animals
 import com.junglerun.game.core.Biome
-import com.junglerun.game.core.Food
-import kotlin.math.PI
+import com.junglerun.game.gfx.Align
+import com.junglerun.game.gfx.Colors
+import com.junglerun.game.gfx.GPath
+import com.junglerun.game.gfx.Gfx
+import com.junglerun.game.gfx.Gradient
 import kotlin.math.abs
+import kotlin.math.ceil
 import kotlin.math.max
 import kotlin.math.min
 import kotlin.math.sin
@@ -35,674 +37,313 @@ class ViewportStyle(
     val ghost: GhostState? = null,
 )
 
+enum class Button { JUMP, SLIDE, ABILITY, PAUSE }
+
+/** Screen rectangle without Android types (the renderer also runs on desktop for previews). */
+class Box(var l: Float = 0f, var t: Float = 0f, var r: Float = 0f, var b: Float = 0f) {
+    val w get() = r - l
+    val h get() = b - t
+    val cx get() = (l + r) / 2f
+    val cy get() = (t + b) / 2f
+    fun set(l: Float, t: Float, r: Float, b: Float): Box { this.l = l; this.t = t; this.r = r; this.b = b; return this }
+    fun contains(x: Float, y: Float) = x in l..r && y in t..b
+}
+
 /**
- * Draws one [GameWorld] into a rectangular viewport. Split-screen simply calls [draw] twice.
- * The world is 100 units tall; ground sits at 80% of the viewport height.
+ * Draws one [GameWorld] into a viewport (split-screen just calls [draw] twice). Works in landscape
+ * and portrait: the world scales to fit ~115 units of track width, and in portrait the touch
+ * controls get their own band under the ground.
  */
-class GameRenderer(private val density: Float) {
-    private val painter = AnimalPainter()
-    private val fill = Paint(Paint.ANTI_ALIAS_FLAG)
-    private val stroke = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        style = Paint.Style.STROKE
-        strokeCap = Paint.Cap.ROUND
-    }
-    private val text = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        typeface = Typeface.create(Typeface.DEFAULT, Typeface.BOLD)
-        color = 0xFFFFFFFF.toInt()
-    }
-    private val textOutline = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        typeface = Typeface.create(Typeface.DEFAULT, Typeface.BOLD)
-        style = Paint.Style.STROKE
-        color = 0xCC000000.toInt()
-        strokeJoin = Paint.Join.ROUND
-    }
-    private val path = Path()
-    private val rect = RectF()
+class GameRenderer {
+    private val chars = CharacterArt()
+    private val world = WorldArt()
+    private val v = View()
+    private val p = GPath()
+    private val tmp = Box()
+    private val pits = FloatArray(32)
 
-    private var skyShader: Shader? = null
-    private var skyKey = ""
+    // ------------------------------------------------------------------ layout
 
-    // Layout values for the viewport currently being drawn
-    private var s = 1f
-    private var groundY = 0f
-    private var playerX = 0f
-    private var camX = 0f
-    private val vp = RectF()
+    private fun portrait(vp: Box) = vp.h > vp.w * 1.15f
 
-    private fun sx(wx: Float) = playerX + (wx - camX) * s
-    private fun sy(wy: Float) = groundY - wy * s
-
-    fun draw(c: Canvas, world: GameWorld, viewport: RectF, style: ViewportStyle) {
-        vp.set(viewport)
-        s = vp.height() / 100f
-        groundY = vp.top + vp.height() * 0.8f
-        playerX = vp.left + min(vp.width() * 0.24f, 34f * s)
-        camX = world.distance
-        world.viewAhead = (vp.right - playerX) / s
-
-        c.save()
-        c.clipRect(vp)
-        drawBackground(c, world.biome, world.distance)
-        drawGround(c, world)
-        drawHazards(c, world)
-        drawPickups(c, world)
-        style.ghost?.let { drawGhost(c, world, it) }
-        drawChaser(c, world)
-        drawRunner(c, world)
-        drawParticles(c, world)
-        drawHud(c, world, style)
-        c.restore()
-    }
-
-    // ------------------------------------------------------------------ background
-
-    private fun drawBackground(c: Canvas, biome: Biome, dist: Float) {
-        val key = "${biome.name}-${vp.top}-${vp.height()}"
-        if (key != skyKey) {
-            skyKey = key
-            skyShader = LinearGradient(0f, vp.top, 0f, groundY, biome.skyTop, biome.skyBottom, Shader.TileMode.CLAMP)
+    /** Positions the camera for [vp]; shared by drawing and input. */
+    fun layout(vp: Box, out: View = v): View {
+        out.left = vp.l; out.top = vp.t; out.right = vp.r; out.bottom = vp.b
+        if (portrait(vp)) {
+            out.s = min(vp.h / 100f, vp.w / 92f)
+            out.groundY = vp.b - vp.h * 0.31f
+            out.playerX = vp.l + vp.w * 0.27f
+        } else {
+            out.s = min(vp.h / 82f, vp.w / 110f)
+            out.groundY = vp.t + vp.h * 0.8f
+            out.playerX = vp.l + min(vp.w * 0.28f, 42f * out.s)
         }
-        fill.shader = skyShader
-        c.drawRect(vp, fill)
-        fill.shader = null
-
-        // Sun
-        fill.color = 0x66FFF59D
-        c.drawCircle(vp.right - 40f * s, vp.top + 18f * s, 10f * s, fill)
-        fill.color = 0xFFFFF176.toInt()
-        c.drawCircle(vp.right - 40f * s, vp.top + 18f * s, 6.5f * s, fill)
-
-        // Clouds (very slow parallax)
-        fill.color = 0xDDFFFFFF.toInt()
-        val cloudSpan = 90f * s
-        val off = (dist * 0.05f * s) % cloudSpan
-        var cx = vp.left - off
-        var i = 0
-        while (cx < vp.right + cloudSpan) {
-            val cy = vp.top + (10f + ((i * 37) % 17)) * s
-            c.drawCircle(cx, cy, 4f * s, fill)
-            c.drawCircle(cx + 4.5f * s, cy - 1.5f * s, 5f * s, fill)
-            c.drawCircle(cx + 9f * s, cy, 3.6f * s, fill)
-            cx += cloudSpan
-            i++
-        }
-
-        // Far hills
-        hills(c, dist * 0.12f, 34f, 9f, 0.018f, biome.farHills)
-        // Near tree line
-        trees(c, biome, dist * 0.4f)
+        return out
     }
 
-    private fun hills(c: Canvas, offset: Float, baseHeight: Float, amp: Float, freq: Float, color: Int) {
-        path.reset()
-        path.moveTo(vp.left, groundY)
-        var x = vp.left
-        val step = 12f
-        while (x <= vp.right + step) {
-            val wx = (x - vp.left) / s + offset
-            val h = baseHeight + sin(wx * freq * 2f * PI.toFloat()) * amp + sin(wx * freq * 5.3f) * amp * 0.4f
-            path.lineTo(x, groundY - h * s)
-            x += step
-        }
-        path.lineTo(vp.right, groundY)
-        path.close()
-        fill.color = color
-        c.drawPath(path, fill)
-    }
+    private fun btnRadius(vp: Box) = min(vp.w, vp.h) * (if (portrait(vp)) 0.115f else 0.095f)
 
-    private fun trees(c: Canvas, biome: Biome, offset: Float) {
-        val spacing = 26f
-        val first = kotlin.math.floor(offset / spacing).toInt() - 1
-        val count = ((vp.width() / s) / spacing).toInt() + 3
-        for (k in first until first + count) {
-            val hash = (k * 2654435761L).toInt() ushr 16
-            val wx = k * spacing + (hash % 9)
-            val x = vp.left + (wx - offset) * s
-            val h = 22f + (hash % 13)
-            when (biome) {
-                Biome.JUNGLE, Biome.RIVERBANK -> palmOrJungle(c, x, h, biome, hash)
-                Biome.SAVANNA -> acacia(c, x, h * 0.8f, biome)
-                Biome.BAMBOO_FOREST -> bamboo(c, x, h + 8f, biome, hash)
-                Biome.PINE_FOREST -> pine(c, x, h + 4f, biome)
-                Biome.MEADOW -> bush(c, x, h * 0.5f, biome, hash)
+    fun button(b: Button, vp: Box, out: Box = tmp): Box {
+        val r = btnRadius(vp)
+        val view = layout(vp, View())
+        val cy = if (portrait(vp)) (view.groundY + vp.b) / 2f + r * 0.15f else vp.b - r * 1.3f
+        return when (b) {
+            Button.SLIDE -> out.set(vp.l + r * 0.45f, cy - r, vp.l + r * 2.45f, cy + r)
+            Button.JUMP -> out.set(vp.r - r * 2.45f, cy - r, vp.r - r * 0.45f, cy + r)
+            Button.ABILITY -> {
+                val ar = r * 0.8f
+                val cx = if (portrait(vp)) vp.cx else vp.r - r * 3.8f
+                out.set(cx - ar, cy - ar, cx + ar, cy + ar)
+            }
+            Button.PAUSE -> {
+                val pr = r * 0.48f
+                out.set(vp.r - pr * 2.4f, vp.t + pr * 0.5f, vp.r - pr * 0.4f, vp.t + pr * 2.5f)
             }
         }
     }
 
-    private fun trunk(c: Canvas, x: Float, h: Float, w: Float, color: Int) {
-        fill.color = color
-        rect.set(x - w * s / 2f, groundY - h * s, x + w * s / 2f, groundY)
-        c.drawRect(rect, fill)
-    }
+    // ------------------------------------------------------------------ frame
 
-    private fun palmOrJungle(c: Canvas, x: Float, h: Float, biome: Biome, hash: Int) {
-        trunk(c, x, h, 2.2f, 0xFF5D4037.toInt())
-        fill.color = biome.nearTrees
-        val top = groundY - h * s
-        c.drawCircle(x, top, 8f * s, fill)
-        c.drawCircle(x - 6f * s, top + 3f * s, 6f * s, fill)
-        c.drawCircle(x + 6f * s, top + 2f * s, 6.5f * s, fill)
-        if (hash % 3 == 0) {
-            // Hanging vine
-            stroke.color = 0xFF2E7D32.toInt()
-            stroke.strokeWidth = 0.6f * s
-            c.drawLine(x + 4f * s, top + 4f * s, x + 4f * s, top + 18f * s, stroke)
-        }
-    }
+    fun draw(g: Gfx, w: GameWorld, vp: Box, style: ViewportStyle) {
+        layout(vp)
+        v.camX = w.distance
+        v.time = w.animTime
+        w.viewAhead = (vp.r - v.playerX) / v.s
+        val th = Theme.of(w.biome)
 
-    private fun acacia(c: Canvas, x: Float, h: Float, biome: Biome) {
-        trunk(c, x, h, 1.6f, 0xFF6D4C41.toInt())
-        fill.color = biome.nearTrees
-        rect.set(x - 12f * s, groundY - (h + 3f) * s, x + 12f * s, groundY - (h - 2f) * s)
-        c.drawOval(rect, fill)
-    }
+        g.save()
+        g.clipRect(vp.l, vp.t, vp.r, vp.b)
+        world.background(g, th, w.biome, v, w.distance)
 
-    private fun bamboo(c: Canvas, x: Float, h: Float, biome: Biome, hash: Int) {
-        for (j in 0 until 3) {
-            val bx = x + (j * 3.5f - 3.5f) * s
-            val bh = h - (hash + j * 7) % 10
-            fill.color = if (j == 1) biome.nearTrees else biome.farHills
-            rect.set(bx - 0.9f * s, groundY - bh * s, bx + 0.9f * s, groundY)
-            c.drawRect(rect, fill)
-            fill.color = 0x33000000
-            var yy = 6f
-            while (yy < bh) {
-                rect.set(bx - 0.9f * s, groundY - yy * s, bx + 0.9f * s, groundY - (yy - 0.4f) * s)
-                c.drawRect(rect, fill)
-                yy += 6f
-            }
-        }
-    }
-
-    private fun pine(c: Canvas, x: Float, h: Float, biome: Biome) {
-        trunk(c, x, 6f, 1.8f, 0xFF4E342E.toInt())
-        fill.color = biome.nearTrees
-        for (j in 0 until 3) {
-            val base = groundY - (5f + j * (h - 5f) / 3.2f) * s
-            val w = (9f - j * 2.2f) * s
-            path.reset()
-            path.moveTo(x - w, base)
-            path.lineTo(x, base - (h / 2.4f) * s)
-            path.lineTo(x + w, base)
-            path.close()
-            c.drawPath(path, fill)
-        }
-    }
-
-    private fun bush(c: Canvas, x: Float, h: Float, biome: Biome, hash: Int) {
-        fill.color = biome.nearTrees
-        c.drawCircle(x, groundY - h * 0.4f * s, h * 0.6f * s, fill)
-        c.drawCircle(x + h * 0.5f * s, groundY - h * 0.3f * s, h * 0.45f * s, fill)
-        if (hash % 2 == 0) {
-            fill.color = if (hash % 4 == 0) 0xFFFF80AB.toInt() else 0xFFFFF176.toInt()
-            c.drawCircle(x - 1f * s, groundY - h * 0.7f * s, 0.9f * s, fill)
-            c.drawCircle(x + 2f * s, groundY - h * 0.5f * s, 0.9f * s, fill)
-        }
-    }
-
-    // ------------------------------------------------------------------ ground & pits
-
-    private fun drawGround(c: Canvas, world: GameWorld) {
-        val biome = world.biome
-        fill.color = biome.ground
-        c.drawRect(vp.left, groundY, vp.right, vp.bottom, fill)
-        fill.color = biome.groundTop
-        c.drawRect(vp.left, groundY, vp.right, groundY + 2.5f * s, fill)
-
-        // Pebbles / grass tufts scrolling at full speed
-        fill.color = 0x33000000
-        val span = 9f
-        val first = kotlin.math.floor((camX - 40f) / span).toInt()
-        val last = first + ((vp.width() / s) / span).toInt() + 8
-        for (k in first..last) {
-            val wx = k * span + (k * 7 % 5)
-            val px = sx(wx)
-            c.drawCircle(px, groundY + (5f + (k * 13 % 9)) * s, 0.7f * s, fill)
-        }
-
-        // Pits
-        for (h in world.hazards) {
+        var n = 0
+        for (h in w.hazards) {
             if (h.kind != HazardKind.PIT || !h.active) continue
-            val l = sx(h.x)
-            val r = sx(h.x + h.w)
-            if (r < vp.left || l > vp.right) continue
-            fill.color = biome.pitColor
-            c.drawRect(l, groundY, r, vp.bottom, fill)
-            val water = biome == Biome.RIVERBANK || biome == Biome.JUNGLE || biome == Biome.BAMBOO_FOREST
-            if (water) {
-                fill.color = 0x55FFFFFF
-                val t = world.animTime
-                var wx = l
-                while (wx < r) {
-                    val wy = groundY + (4f + sin(t * 3f + wx * 0.05f)) * s
-                    c.drawRect(wx, wy, min(r, wx + 3f * s), wy + 0.5f * s, fill)
-                    wx += 6f * s
-                }
-                if (biome == Biome.RIVERBANK && h.variant == 0) {
-                    // Croc eyes watching from the water
-                    fill.color = 0xFF4E7D32.toInt()
-                    val ex = (l + r) / 2f
-                    c.drawCircle(ex, groundY + 4f * s, 1.3f * s, fill)
-                    c.drawCircle(ex + 2.6f * s, groundY + 4f * s, 1.3f * s, fill)
-                    fill.color = 0xFFFFEB3B.toInt()
-                    c.drawCircle(ex, groundY + 3.6f * s, 0.5f * s, fill)
-                    c.drawCircle(ex + 2.6f * s, groundY + 3.6f * s, 0.5f * s, fill)
-                }
-            } else {
-                fill.color = 0x44000000
-                c.drawRect(l, groundY, r, groundY + 3f * s, fill)
-            }
-            // Edges
-            fill.color = biome.groundTop
-            c.drawRect(l - 0.6f * s, groundY, l, groundY + 6f * s, fill)
-            c.drawRect(r, groundY, r + 0.6f * s, groundY + 6f * s, fill)
+            val l = v.sx(h.x)
+            val r = v.sx(h.x + h.w)
+            if (r < vp.l || l > vp.r || n >= pits.size / 2) continue
+            pits[n * 2] = l
+            pits[n * 2 + 1] = r
+            n++
         }
+        world.ground(g, th, w.biome, v, pits, n)
+        if (w.biome == Biome.RIVERBANK) {
+            for (h in w.hazards) if (h.kind == HazardKind.PIT && h.variant == 0) world.crocEyes(g, v, v.sx(h.x + h.w / 2f))
+        }
+
+        drawHazards(g, w, th)
+        drawPickups(g, w)
+        style.ghost?.let { drawGhost(g, w, it) }
+        drawChaser(g, w)
+        drawRunner(g, w)
+        drawParticles(g, w)
+        drawHint(g, w, vp)
+        drawHud(g, w, vp, style)
+        g.restore()
     }
 
     // ------------------------------------------------------------------ hazards
 
-    private fun drawHazards(c: Canvas, world: GameWorld) {
-        val biome = world.biome
-        for (h in world.hazards) {
+    private fun drawHazards(g: Gfx, w: GameWorld, th: Theme) {
+        val s = v.s
+        for (h in w.hazards) {
             if (!h.active || h.smashed || h.kind == HazardKind.PIT) continue
-            val l = sx(h.x)
-            val r = sx(h.x + h.w)
-            if (r < vp.left - 20f || l > vp.right + 20f) continue
+            val l = v.sx(h.x)
+            if (l > v.right + 20f * s || v.sx(h.x + h.w) < v.left - 20f * s) continue
             when (h.kind) {
-                HazardKind.LOW -> lowObstacle(c, h, l, r, biome)
-                HazardKind.TALL -> tallObstacle(c, h, l, r, biome)
-                HazardKind.OVERHEAD -> overhead(c, h, l, r, biome)
-                HazardKind.FALLING -> falling(c, h, l, r, biome)
-                HazardKind.MOVING -> moving(c, h, l, r, biome, world.animTime)
-                HazardKind.FLYER -> flyer(c, h, l, r, biome, world.animTime)
-                HazardKind.PIT -> Unit
-            }
-        }
-    }
-
-    private fun lowObstacle(c: Canvas, h: Hazard, l: Float, r: Float, biome: Biome) {
-        val top = sy(h.y + h.h)
-        val bottom = sy(h.y)
-        when (if (biome == Biome.SAVANNA && h.variant == 2) 3 else h.variant) {
-            0 -> { // Log
-                fill.color = 0xFF795548.toInt()
-                rect.set(l, top, r, bottom)
-                c.drawRoundRect(rect, 2f * s, 2f * s, fill)
-                fill.color = 0xFFD7B899.toInt()
-                c.drawCircle(r - 1.6f * s, (top + bottom) / 2f, (bottom - top) / 2.6f, fill)
-                stroke.color = 0xFF8D6E63.toInt(); stroke.strokeWidth = 0.4f * s
-                c.drawCircle(r - 1.6f * s, (top + bottom) / 2f, (bottom - top) / 5f, stroke)
-            }
-            1 -> { // Rock
-                fill.color = 0xFF9E9E9E.toInt()
-                rect.set(l, top, r, bottom + 1f * s)
-                c.drawOval(rect, fill)
-                fill.color = 0xFFBDBDBD.toInt()
-                rect.set(l + 1f * s, top + 0.8f * s, l + (r - l) * 0.55f, top + 2.4f * s)
-                c.drawOval(rect, fill)
-            }
-            2 -> { // Bush / biome plant
-                fill.color = if (biome == Biome.MEADOW) 0xFF8D6E63.toInt() else darken(biome.nearTrees)
-                if (biome == Biome.MEADOW) {
-                    // Little wooden fence
-                    for (k in 0..2) c.drawRect(l + k * (r - l) / 2.4f, top, l + k * (r - l) / 2.4f + 1.2f * s, bottom, fill)
-                    c.drawRect(l, top + 1.2f * s, r, top + 2.2f * s, fill)
-                    c.drawRect(l, top + 3.8f * s, r, top + 4.8f * s, fill)
-                } else {
-                    c.drawCircle((l + r) / 2f, bottom - 3f * s, 3.6f * s, fill)
-                    c.drawCircle(l + 1.5f * s, bottom - 2f * s, 2.4f * s, fill)
-                    c.drawCircle(r - 1.5f * s, bottom - 2f * s, 2.4f * s, fill)
+                HazardKind.FALLING -> {
+                    val cx = v.sx(h.x + h.w / 2f)
+                    if (h.y > 0.5f) world.shadow(g, cx, v.groundY, (1.5f + (1f - min(1f, h.y / 70f)) * 2.5f) * s, 0.35f)
+                    g.save(); g.translate(cx, v.sy(h.y + h.h / 2f)); g.scale(s, s)
+                    val spin = h.y * 9f
+                    when (w.biome) {
+                        Biome.JUNGLE, Biome.RIVERBANK, Biome.BAMBOO_FOREST -> world.coconut(g, h.h / 2f, spin)
+                        Biome.PINE_FOREST -> world.pinecone(g, h.h / 2f, spin)
+                        else -> world.boulder(g, h.h / 2f, spin)
+                    }
+                    g.restore()
+                    continue
                 }
-            }
-            else -> { // Thorn bush
-                fill.color = 0xFF827717.toInt()
-                c.drawCircle((l + r) / 2f, bottom - 3f * s, 3.5f * s, fill)
-                stroke.color = 0xFF3E2723.toInt(); stroke.strokeWidth = 0.35f * s
-                for (k in 0 until 6) {
-                    val a = k * 1.05f
-                    val cx = (l + r) / 2f; val cy = bottom - 3f * s
-                    c.drawLine(cx, cy, cx + kotlin.math.cos(a) * 4.6f * s, cy - kotlin.math.abs(sin(a)) * 4.6f * s, stroke)
+                HazardKind.MOVING -> {
+                    val cx = v.sx(h.x + h.w / 2f)
+                    world.shadow(g, cx, v.groundY, 3.5f * s, 0.25f)
+                    if (w.biome == Biome.SAVANNA || w.biome == Biome.MEADOW) {
+                        chars.drawBoar(g, cx, v.groundY, s, h.phase, w.animTime)
+                    } else {
+                        g.save(); g.translate(cx, v.sy(h.h / 2f)); g.scale(s, s)
+                        world.boulder(g, h.h / 2f * 1.1f, -h.phase * 25f)
+                        g.restore()
+                    }
+                    // dust trail
+                    for (i in 0 until 3) {
+                        val k = (w.animTime * 3f + i * 0.33f) % 1f
+                        g.fillCircle(cx + (4f + k * 6f) * s, v.groundY - (0.6f + k) * s, (0.6f + k * 1.2f) * s, Colors.withAlpha(0xFFFFFFFF.toInt(), 0.5f * (1f - k)))
+                    }
+                    continue
                 }
-            }
-        }
-    }
-
-    private fun tallObstacle(c: Canvas, h: Hazard, l: Float, r: Float, biome: Biome) {
-        val top = sy(h.y + h.h)
-        val bottom = sy(h.y)
-        if (biome == Biome.SAVANNA) {
-            // Termite mound
-            fill.color = 0xFFA1887F.toInt()
-            path.reset(); path.moveTo(l, bottom); path.lineTo((l + r) / 2f - 1f * s, top); path.lineTo((l + r) / 2f + 1.4f * s, top + 1f * s); path.lineTo(r, bottom); path.close()
-            c.drawPath(path, fill)
-        } else if (biome == Biome.BAMBOO_FOREST) {
-            fill.color = 0xFF689F38.toInt()
-            for (k in 0..2) {
-                val bx = l + k * (r - l) / 3f
-                rect.set(bx, top + k * 1.2f * s, bx + (r - l) / 3.4f, bottom)
-                c.drawRect(rect, fill)
-            }
-        } else {
-            // Stacked boulders / tree stump
-            fill.color = 0xFF6D4C41.toInt()
-            rect.set(l, top + 2f * s, r, bottom)
-            c.drawRoundRect(rect, 1.2f * s, 1.2f * s, fill)
-            fill.color = 0xFFD7B899.toInt()
-            rect.set(l, top, r, top + 3.6f * s)
-            c.drawOval(rect, fill)
-            fill.color = 0xFF388E3C.toInt()
-            c.drawCircle(l + 1.4f * s, top + 3f * s, 1.3f * s, fill)
-        }
-    }
-
-    private fun overhead(c: Canvas, h: Hazard, l: Float, r: Float, biome: Biome) {
-        val bottom = sy(h.y)
-        val barTop = sy(h.y + 3f)
-        when (biome) {
-            Biome.PINE_FOREST -> {
-                // Beehive hanging on a branch
-                stroke.color = 0xFF4E342E.toInt(); stroke.strokeWidth = 1.2f * s
-                c.drawLine(l - 4f * s, vp.top, r + 4f * s, sy(h.y + 9f), stroke)
-                fill.color = 0xFFFFB300.toInt()
-                rect.set(l, sy(h.y + 9f), r, bottom)
-                c.drawOval(rect, fill)
-                fill.color = 0xFF8D6E00.toInt()
-                for (k in 1..3) c.drawRect(l + 0.5f * s, sy(h.y + k * 2.2f), r - 0.5f * s, sy(h.y + k * 2.2f) + 0.4f * s, fill)
-            }
-            Biome.BAMBOO_FOREST -> {
-                fill.color = 0xFF7CB342.toInt()
-                c.drawRect(l - 1f * s, barTop, r + 1f * s, bottom, fill)
-                fill.color = 0xFF558B2F.toInt()
-                c.drawRect(l - 1.5f * s, vp.top, l, groundY, fill)
-                c.drawRect(r, vp.top, r + 1.5f * s, groundY, fill)
-            }
-            else -> {
-                // Fallen tree branch with leaves and vines
-                fill.color = 0xFF6D4C41.toInt()
-                rect.set(l - 2f * s, barTop, r + 2f * s, bottom)
-                c.drawRoundRect(rect, 1.4f * s, 1.4f * s, fill)
-                stroke.color = 0xFF2E7D32.toInt(); stroke.strokeWidth = 0.6f * s
-                var vx = l
-                while (vx < r) {
-                    c.drawLine(vx, vp.top, vx, barTop, stroke)
-                    vx += 3f * s
+                HazardKind.FLYER -> {
+                    val cx = v.sx(h.x + h.w / 2f)
+                    val cy = v.sy(h.y + h.h / 2f)
+                    if (w.biome == Biome.PINE_FOREST || w.biome == Biome.MEADOW) {
+                        chars.drawChaser(g, com.junglerun.game.core.Chaser.BEES, cx - 1f * s, cy + 6.5f * s * 0.5f, s * 0.45f, 0f, w.animTime)
+                    } else {
+                        chars.drawBird(g, cx, cy, s * 0.9f, w.animTime + h.phase, parrot = w.biome == Biome.JUNGLE || w.biome == Biome.RIVERBANK)
+                    }
+                    continue
                 }
-                fill.color = biome.nearTrees
-                c.drawCircle(l, barTop, 2.2f * s, fill)
-                c.drawCircle(r, barTop, 2.6f * s, fill)
+                else -> Unit
             }
-        }
-    }
-
-    private fun falling(c: Canvas, h: Hazard, l: Float, r: Float, biome: Biome) {
-        val cx = (l + r) / 2f
-        if (h.y > 0.5f && h.x - camX < 160f) {
-            // Shadow warns where it lands
-            val k = 1f - min(1f, h.y / 70f)
-            fill.color = ((0x30 + (k * 0x60).toInt()) shl 24)
-            rect.set(cx - (2f + k * 2f) * s, groundY - 0.6f * s, cx + (2f + k * 2f) * s, groundY + 0.6f * s)
-            c.drawOval(rect, fill)
-        }
-        val cy = sy(h.y + h.h / 2f)
-        val r0 = h.h / 2f * s
-        when (biome) {
-            Biome.JUNGLE, Biome.RIVERBANK -> {
-                fill.color = 0xFF6D4C41.toInt(); c.drawCircle(cx, cy, r0, fill)
-                fill.color = 0xFF3E2723.toInt()
-                c.drawCircle(cx - r0 * 0.3f, cy - r0 * 0.2f, r0 * 0.18f, fill)
-                c.drawCircle(cx + r0 * 0.15f, cy - r0 * 0.35f, r0 * 0.18f, fill)
+            g.save()
+            g.translate(l, v.sy(h.y))
+            g.scale(s, s)
+            when (h.kind) {
+                HazardKind.LOW -> when (w.biome) {
+                    Biome.MEADOW -> if (h.variant == 2) world.fence(g, h.w, h.h) else if (h.variant == 1) world.rock(g, h.w, h.h) else world.bush(g, h.w, h.h, th, false)
+                    Biome.SAVANNA -> if (h.variant == 0) world.bush(g, h.w, h.h, th, true) else world.rock(g, h.w, h.h, 0xFFC9A27E.toInt())
+                    else -> when (h.variant) {
+                        0 -> world.log(g, h.w, h.h, mossy = w.biome != Biome.PINE_FOREST)
+                        1 -> world.rock(g, h.w, h.h)
+                        else -> world.bush(g, h.w, h.h, th, false)
+                    }
+                }
+                HazardKind.TALL -> when (w.biome) {
+                    Biome.SAVANNA -> world.termiteMound(g, h.w, h.h)
+                    Biome.BAMBOO_FOREST -> world.bambooWall(g, h.w, h.h)
+                    else -> world.stump(g, h.w, h.h)
+                }
+                HazardKind.OVERHEAD -> {
+                    val reach = (v.groundY - v.top) / s - h.y + 2f
+                    when (w.biome) {
+                        Biome.PINE_FOREST -> world.beehive(g, h.w, reach)
+                        Biome.BAMBOO_FOREST -> world.bambooBar(g, h.w, reach)
+                        else -> world.branch(g, h.w, reach, th)
+                    }
+                }
+                else -> Unit
             }
-            Biome.PINE_FOREST -> {
-                fill.color = 0xFF8D6E63.toInt()
-                rect.set(cx - r0 * 0.7f, cy - r0, cx + r0 * 0.7f, cy + r0); c.drawOval(rect, fill)
-                stroke.color = 0xFF4E342E.toInt(); stroke.strokeWidth = 0.3f * s
-                for (k in -1..1) c.drawLine(cx - r0 * 0.7f, cy + k * r0 * 0.45f, cx + r0 * 0.7f, cy + k * r0 * 0.45f, stroke)
-            }
-            else -> {
-                fill.color = 0xFF9E9E9E.toInt(); c.drawCircle(cx, cy, r0, fill)
-                fill.color = 0xFFBDBDBD.toInt(); c.drawCircle(cx - r0 * 0.3f, cy - r0 * 0.3f, r0 * 0.4f, fill)
-            }
-        }
-    }
-
-    private fun moving(c: Canvas, h: Hazard, l: Float, r: Float, biome: Biome, t: Float) {
-        if (biome == Biome.SAVANNA || biome == Biome.MEADOW) {
-            // Charging warthog facing the runner (mirror the painter)
-            c.save()
-            c.scale(-1f, 1f, (l + r) / 2f, groundY)
-            painter.drawChaser(c, com.junglerun.game.core.Chaser.HYENA, (l + r) / 2f, sy(h.y), s * 0.6f, h.phase)
-            c.restore()
-            fill.color = 0xFFFFFFFF.toInt()
-            c.drawCircle(l + 0.6f * s, sy(h.y + 3.4f), 0.5f * s, fill)
-        } else {
-            // Rolling boulder
-            val cx = (l + r) / 2f
-            val cy = sy(h.y + h.h / 2f)
-            val rr = h.h / 2f * s * 1.1f
-            fill.color = 0xFF8D8D8D.toInt(); c.drawCircle(cx, cy, rr, fill)
-            stroke.color = 0xFF5F5F5F.toInt(); stroke.strokeWidth = 0.5f * s
-            val a = h.phase * 0.6f
-            c.drawLine(cx - kotlin.math.cos(a) * rr, cy - sin(a) * rr, cx + kotlin.math.cos(a) * rr, cy + sin(a) * rr, stroke)
-        }
-        // Dust behind it
-        fill.color = 0x44FFFFFF
-        c.drawCircle(r + 1.5f * s, groundY - 1f * s, (1f + abs(sin(t * 10f))) * s, fill)
-    }
-
-    private fun flyer(c: Canvas, h: Hazard, l: Float, r: Float, biome: Biome, t: Float) {
-        val cx = (l + r) / 2f
-        val cy = sy(h.y + h.h / 2f)
-        if (biome == Biome.PINE_FOREST || biome == Biome.MEADOW) {
-            painter.drawChaser(c, com.junglerun.game.core.Chaser.BEES, cx - 2f * s, cy + 9f * s * 0.5f, s * 0.5f, t * 6f)
-        } else {
-            // Parrot / bat with flapping wings
-            val flap = sin(t * 18f + h.phase) * 2.2f * s
-            fill.color = if (biome == Biome.JUNGLE) 0xFFE53935.toInt() else 0xFF5D4037.toInt()
-            rect.set(cx - 2.6f * s, cy - 1.4f * s, cx + 2.6f * s, cy + 1.4f * s)
-            c.drawOval(rect, fill)
-            path.reset(); path.moveTo(cx - 1f * s, cy); path.lineTo(cx + 0.5f * s, cy - 3.5f * s - flap); path.lineTo(cx + 1.8f * s, cy); path.close()
-            fill.color = if (biome == Biome.JUNGLE) 0xFF1E88E5.toInt() else 0xFF3E2723.toInt()
-            c.drawPath(path, fill)
-            fill.color = 0xFFFFC107.toInt()
-            path.reset(); path.moveTo(cx - 2.6f * s, cy - 0.4f * s); path.lineTo(cx - 4f * s, cy); path.lineTo(cx - 2.6f * s, cy + 0.4f * s); path.close()
-            c.drawPath(path, fill)
+            g.restore()
         }
     }
 
     // ------------------------------------------------------------------ pickups
 
-    private fun drawPickups(c: Canvas, world: GameWorld) {
-        val food = world.animal.food
-        for (p in world.pickups) {
-            val x = sx(p.x)
-            if (x < vp.left - 10f || x > vp.right + 10f) continue
-            val bob = sin(world.animTime * 4f + p.bobPhase) * 0.6f
+    private fun drawPickups(g: Gfx, w: GameWorld) {
+        val s = v.s
+        for (pk in w.pickups) {
+            val x = v.sx(pk.x)
+            if (x < v.left - 5f * s || x > v.right + 5f * s) continue
+            val bob = sin(w.animTime * 4f + pk.bobPhase) * 0.5f
             var scale = 1f
-            var alpha = 255
-            if (p.collected) {
-                scale = 1f + p.collectTime * 3f
-                alpha = max(0, (255 * (1f - p.collectTime / 0.35f)).toInt())
-                if (alpha == 0) continue
+            var alpha = 1f
+            if (pk.collected) {
+                val k = pk.collectTime / 0.35f
+                scale = 1f + k * 0.8f
+                alpha = 1f - k
+                if (alpha <= 0f) continue
             }
-            val y = sy(p.y + bob)
-            when (p.kind) {
-                PickupKind.FOOD -> drawFood(c, food, x, y, 1.6f * s * scale, alpha, false)
-                PickupKind.GOLDEN_FOOD -> drawFood(c, food, x, y, 2.2f * s * scale, alpha, true)
-                PickupKind.GEM -> gem(c, x, y, 2f * s * scale, alpha)
-                else -> powerUp(c, p.kind, x, y, 2.8f * s * scale, alpha, world.animTime)
+            val y = v.sy(pk.y + bob)
+            g.save()
+            g.translate(x, y)
+            if (alpha < 1f) g.multiplyAlpha(alpha)
+            when (pk.kind) {
+                PickupKind.FOOD -> { g.scale(s * 1.75f * scale); world.food(g, w.animal.food, false, w.animTime) }
+                PickupKind.GOLDEN_FOOD -> {
+                    g.fillCircle(0f, 0f, 3.6f * s, 0, goldenGlow(s))
+                    g.scale(s * 2.1f * scale); world.food(g, w.animal.food, true, w.animTime)
+                }
+                PickupKind.GEM -> { g.scale(s * 1.7f * scale); world.gem(g, w.animTime + pk.bobPhase) }
+                PickupKind.MAGNET -> { g.scale(s * 2.4f * scale); world.powerUp(g, 0, w.animTime) }
+                PickupKind.SHIELD -> { g.scale(s * 2.4f * scale); world.powerUp(g, 1, w.animTime) }
+                PickupKind.DOUBLER -> { g.scale(s * 2.4f * scale); world.powerUp(g, 2, w.animTime) }
+                PickupKind.MYSTERY -> { g.scale(s * 2.4f * scale); world.powerUp(g, 3, w.animTime) }
             }
+            g.restore()
         }
     }
 
-    fun drawFood(c: Canvas, food: Food, x: Float, y: Float, r: Float, alpha: Int, golden: Boolean) {
-        val main = if (golden) 0xFFFFD700.toInt() else food.color
-        val acc = if (golden) 0xFFFFF59D.toInt() else food.accent
-        if (golden) {
-            fill.shader = RadialGradient(x, y, r * 2f, 0x88FFF176.toInt(), 0x00FFF176, Shader.TileMode.CLAMP)
-            fill.alpha = alpha
-            c.drawCircle(x, y, r * 2f, fill)
-            fill.shader = null
+    private var glowS = -1f
+    private var glow: Gradient? = null
+    private fun goldenGlow(s: Float): Gradient {
+        if (s != glowS || glow == null) {
+            glowS = s
+            glow = Gradient.radial(0f, 0f, 3.6f * s, intArrayOf(0x99FFF176.toInt(), 0x00FFF176), null)
         }
-        fill.color = main; fill.alpha = alpha
-        stroke.color = acc; stroke.alpha = alpha
-        when (food) {
-            Food.BANANA -> {
-                stroke.color = main; stroke.alpha = alpha; stroke.strokeWidth = r * 0.75f
-                rect.set(x - r, y - r * 1.2f, x + r, y + r * 0.8f)
-                c.drawArc(rect, 20f, 140f, false, stroke)
-                fill.color = acc; fill.alpha = alpha
-                c.drawCircle(x + r * 0.92f, y - r * 0.05f, r * 0.18f, fill)
-            }
-            Food.MEAT -> {
-                stroke.strokeWidth = r * 0.35f; stroke.color = 0xFFF5F5F5.toInt(); stroke.alpha = alpha
-                c.drawLine(x, y, x + r * 1.1f, y - r * 0.8f, stroke)
-                c.drawCircle(x + r * 1.15f, y - r * 0.95f, r * 0.25f, fillWith(0xFFF5F5F5.toInt(), alpha))
-                rect.set(x - r, y - r * 0.6f, x + r * 0.5f, y + r * 0.8f)
-                c.drawOval(rect, fillWith(main, alpha))
-            }
-            Food.CARROT -> {
-                path.reset(); path.moveTo(x - r * 0.5f, y - r * 0.7f); path.lineTo(x + r * 0.5f, y - r * 0.7f); path.lineTo(x, y + r * 1.1f); path.close()
-                c.drawPath(path, fillWith(main, alpha))
-                stroke.strokeWidth = r * 0.25f
-                c.drawLine(x, y - r * 0.7f, x - r * 0.4f, y - r * 1.4f, stroke)
-                c.drawLine(x, y - r * 0.7f, x + r * 0.4f, y - r * 1.4f, stroke)
-            }
-            Food.BAMBOO -> {
-                rect.set(x - r * 0.35f, y - r * 1.2f, x + r * 0.35f, y + r * 1.2f)
-                c.drawRoundRect(rect, r * 0.2f, r * 0.2f, fillWith(main, alpha))
-                stroke.strokeWidth = r * 0.15f
-                c.drawLine(x - r * 0.35f, y, x + r * 0.35f, y, stroke)
-                c.drawLine(x + r * 0.35f, y - r * 0.6f, x + r, y - r, stroke)
-            }
-            Food.HONEY -> {
-                rect.set(x - r * 0.9f, y - r * 0.6f, x + r * 0.9f, y + r)
-                c.drawOval(rect, fillWith(main, alpha))
-                rect.set(x - r * 0.7f, y - r, x + r * 0.7f, y - r * 0.45f)
-                c.drawRoundRect(rect, r * 0.2f, r * 0.2f, fillWith(acc, alpha))
-            }
-            Food.PEANUT -> {
-                c.drawCircle(x - r * 0.4f, y, r * 0.6f, fillWith(main, alpha))
-                c.drawCircle(x + r * 0.45f, y - r * 0.1f, r * 0.55f, fillWith(main, alpha))
-                stroke.strokeWidth = r * 0.12f
-                c.drawLine(x, y - r * 0.5f, x, y + r * 0.4f, stroke)
-            }
-            Food.LEAVES -> {
-                path.reset(); path.moveTo(x - r, y); path.quadTo(x, y - r * 1.2f, x + r, y); path.quadTo(x, y + r * 1.2f, x - r, y); path.close()
-                c.drawPath(path, fillWith(main, alpha))
-                stroke.strokeWidth = r * 0.12f
-                c.drawLine(x - r, y, x + r * 0.8f, y, stroke)
-            }
-        }
-        stroke.alpha = 255
-        fill.alpha = 255
-    }
-
-    private fun fillWith(color: Int, alpha: Int): Paint {
-        fill.color = color
-        fill.alpha = alpha
-        return fill
-    }
-
-    private fun gem(c: Canvas, x: Float, y: Float, r: Float, alpha: Int) {
-        path.reset()
-        path.moveTo(x, y - r); path.lineTo(x + r * 0.8f, y - r * 0.2f); path.lineTo(x, y + r); path.lineTo(x - r * 0.8f, y - r * 0.2f); path.close()
-        c.drawPath(path, fillWith(0xFF00B0FF.toInt(), alpha))
-        path.reset()
-        path.moveTo(x, y - r); path.lineTo(x + r * 0.35f, y - r * 0.2f); path.lineTo(x, y + r * 0.3f); path.lineTo(x - r * 0.35f, y - r * 0.2f); path.close()
-        c.drawPath(path, fillWith(0xFFB3E5FC.toInt(), alpha))
-    }
-
-    private fun powerUp(c: Canvas, kind: PickupKind, x: Float, y: Float, r: Float, alpha: Int, t: Float) {
-        val color = when (kind) {
-            PickupKind.MAGNET -> 0xFFE53935.toInt()
-            PickupKind.SHIELD -> 0xFF1E88E5.toInt()
-            PickupKind.DOUBLER -> 0xFFFFB300.toInt()
-            else -> 0xFF8E24AA.toInt()
-        }
-        val pulse = 1f + sin(t * 6f) * 0.06f
-        c.drawCircle(x, y, r * pulse, fillWith(0xCCFFFFFF.toInt(), alpha))
-        stroke.color = color; stroke.alpha = alpha; stroke.strokeWidth = r * 0.16f
-        c.drawCircle(x, y, r * pulse, stroke)
-        val label = when (kind) {
-            PickupKind.MAGNET -> "U"
-            PickupKind.SHIELD -> "◆"
-            PickupKind.DOUBLER -> "2x"
-            else -> "?"
-        }
-        text.textSize = r * 1.1f
-        text.color = color
-        text.alpha = alpha
-        text.textAlign = Paint.Align.CENTER
-        c.drawText(label, x, y + r * 0.38f, text)
-        text.alpha = 255
-        stroke.alpha = 255
+        return glow!!
     }
 
     // ------------------------------------------------------------------ characters
 
-    private fun runnerPose(world: GameWorld): Pose = when {
-        world.state == RunState.COUNTDOWN && world.distance < 1f -> Pose.IDLE
-        world.sliding -> Pose.SLIDE
-        !world.onGround -> Pose.JUMP
+    private fun pose(w: GameWorld): Pose = when {
+        w.state == RunState.COUNTDOWN && w.distance < 1f -> Pose.IDLE
+        w.sliding -> Pose.SLIDE
+        !w.onGround && w.vy > 0f -> Pose.JUMP
+        !w.onGround -> Pose.FALL
         else -> Pose.RUN
     }
 
-    private fun drawRunner(c: Canvas, world: GameWorld) {
-        val a = world.animal
-        val x = playerX
-        val y = sy(world.y)
-        // Shadow
-        val shadowScale = max(0.3f, 1f - world.y / 30f)
-        fill.color = 0x33000000
-        rect.set(x - 3.5f * s * shadowScale, groundY - 0.7f * s, x + 3.5f * s * shadowScale, groundY + 0.7f * s)
-        if (world.y >= -0.5f) c.drawOval(rect, fill)
+    private fun drawRunner(g: Gfx, w: GameWorld) {
+        val s = v.s
+        val x = v.playerX
+        val y = v.sy(w.y)
+        if (w.y > -0.5f) world.shadow(g, x, v.groundY, 3.4f * s * max(0.35f, 1f - w.y / 30f), 0.28f)
 
-        if (a.id == "golden_monkey" || world.abilityActive) {
-            fill.shader = RadialGradient(x, y - 6f * s, 10f * s, 0x66FFEB3B, 0x00FFEB3B, Shader.TileMode.CLAMP)
-            c.drawCircle(x, y - 6f * s, 10f * s, fill)
-            fill.shader = null
+        if (w.abilityActive || w.animal.id == "golden_monkey") {
+            g.fillCircle(x, y - 6f * s, 11f * s, 0, auraGrad(s, if (w.abilityActive) 0x88FFD54F.toInt() else 0x55FFE082)) 
         }
-        val flashing = world.stumbleFlash > 0f && ((world.animTime * 12f).toInt() % 2 == 0)
-        val alpha = if (flashing) 110 else 255
-        painter.drawAnimal(c, a.shape, a.bodyColor, a.accentColor, x, y, s, world.distance * 0.32f, runnerPose(world), alpha)
+        val flashing = w.stumbleFlash > 0f && ((w.animTime * 12f).toInt() % 2 == 0)
+        g.save()
+        if (w.landTime > 0f) {
+            val k = w.landTime / 0.16f * 0.12f
+            g.translate(x, y); g.scale(1f + k, 1f - k); g.translate(-x, -y)
+        }
+        chars.drawAnimal(
+            g, w.animal.shape, x, y, s, w.distance * 0.3f, pose(w), w.mood, w.animTime,
+            golden = w.animal.id == "golden_monkey", alpha = if (flashing) 0.45f else 1f,
+        )
+        g.restore()
 
-        if (world.invincible) {
-            stroke.color = if (world.shieldTime > 0f || world.reviveShield > 0f) 0xAA42A5F5.toInt() else 0xAAFFD54F.toInt()
-            stroke.strokeWidth = 0.7f * s
-            c.drawCircle(x + 0.5f * s, y - 5.5f * s, 8.5f * s, stroke)
-            fill.color = 0x2242A5F5
-            c.drawCircle(x + 0.5f * s, y - 5.5f * s, 8.5f * s, fill)
+        if (w.invincible) {
+            val c = if (w.shieldTime > 0f || w.reviveShield > 0f) 0xFF42A5F5.toInt() else 0xFFFFD54F.toInt()
+            val r = (8.5f + sin(w.animTime * 6f) * 0.3f) * s
+            g.fillCircle(x + 0.5f * s, y - 6f * s, r, Colors.withAlpha(c, 0.16f))
+            g.strokeCircle(x + 0.5f * s, y - 6f * s, r, 0.45f * s, Colors.withAlpha(c, 0.75f))
+            g.fillOval(x - 4f * s, y - 12f * s, x - 1f * s, y - 10f * s, 0x66FFFFFF)
         }
-        if (world.magnetTime > 0f) {
-            stroke.color = 0x66E53935
-            stroke.strokeWidth = 0.4f * s
-            val rr = (6f + (world.animTime * 20f) % 8f) * s
-            c.drawCircle(x, y - 5.5f * s, rr, stroke)
+        if (w.magnetTime > 0f) {
+            for (i in 0 until 2) {
+                val k = ((w.animTime * 1.5f + i * 0.5f) % 1f)
+                g.strokeCircle(x, y - 6f * s, (5f + k * 12f) * s, 0.3f * s, Colors.withAlpha(0xFFE53950.toInt(), 0.5f * (1f - k)))
+            }
         }
     }
 
-    private fun drawChaser(c: Canvas, world: GameWorld) {
-        val chase = world.chase
-        val caught = world.state == RunState.DOWN && world.cause == DeathCause.CAUGHT
-        val gapUnits = if (caught) 4f else 9f + (1f - chase) * 45f
-        val x = playerX - gapUnits * s
-        if (x < vp.left - 15f * s) return
-        val bob = abs(sin(world.animTime * 9f)) * 0.8f
-        painter.drawChaser(c, world.animal.chaser, x, groundY - bob * s, s * 1.15f, world.animTime * 11f)
+    private val auraCache = HashMap<Int, Gradient>()
+    private var auraS = -1f
+    private fun auraGrad(s: Float, color: Int): Gradient {
+        if (s != auraS) { auraCache.clear(); auraS = s }
+        return auraCache.getOrPut(color) { Gradient.radial(0f, 0f, 11f * s, intArrayOf(color, color and 0x00FFFFFF), null) }
     }
 
-    private fun drawGhost(c: Canvas, world: GameWorld, ghost: GhostState) {
+    private fun drawChaser(g: Gfx, w: GameWorld) {
+        val s = v.s
+        val caught = w.state == RunState.DOWN && w.cause == DeathCause.CAUGHT
+        val gap = if (caught) 4f else 10f + (1f - w.chase) * 40f
+        val x = v.playerX - gap * s
+        if (x < v.left - 15f * s) return
+        val bob = abs(sin(w.animTime * 9f)) * 0.7f
+        world.shadow(g, x, v.groundY, 4f * s, 0.25f)
+        chars.drawChaser(g, w.animal.chaser, x, v.groundY - bob * s, s * 1.2f, w.animTime * 11f, w.animTime)
+    }
+
+    private fun drawGhost(g: Gfx, w: GameWorld, ghost: GhostState) {
+        val s = v.s
         val spec = Animals.get(ghost.animalId)
-        val gx = sx(ghost.distance)
-        val nameY = vp.top + 22f * s
-        text.textSize = 3.6f * s
-        text.textAlign = Paint.Align.CENTER
-        if (gx < vp.left + 6f * s || gx > vp.right - 6f * s) {
-            // Off-screen indicator
-            val ahead = gx > vp.right
-            val ex = if (ahead) vp.right - 10f * s else vp.left + 10f * s
-            val diff = ((ghost.distance - world.distance) / Physics.UNITS_PER_METER).toInt()
-            outlinedText(c, "${ghost.name} ${if (diff > 0) "+" else ""}${diff}m ${if (ahead) "▶" else "◀"}", ex, nameY, 0xFFFFEB3B.toInt())
+        val gx = v.sx(ghost.distance)
+        if (gx < v.left + 6f * s || gx > v.right - 6f * s) {
+            val ahead = gx > v.right
+            val diff = ((ghost.distance - w.distance) / Physics.UNITS_PER_METER).toInt()
+            val ex = if (ahead) v.right - 4f * s else v.left + 4f * s
+            pill(g, "${ghost.name} ${if (diff > 0) "+" else ""}${diff}m ${if (ahead) "▶" else "◀"}", ex, v.top + 30f * s * 0.6f, 3.2f * s,
+                if (ahead) Align.RIGHT else Align.LEFT, 0xCC7E57C2.toInt())
             return
         }
         val pose = when {
@@ -711,180 +352,237 @@ class GameRenderer(private val density: Float) {
             ghost.y > 0.5f -> Pose.JUMP
             else -> Pose.RUN
         }
-        painter.drawAnimal(c, spec.shape, spec.bodyColor, spec.accentColor, gx, sy(ghost.y), s, ghost.distance * 0.32f, pose, 120)
-        outlinedText(c, ghost.name, gx, sy(ghost.y + 15f), 0xFFFFEB3B.toInt())
+        chars.drawAnimal(g, spec.shape, gx, v.sy(ghost.y), s, ghost.distance * 0.3f, pose, Mood.NORMAL, w.animTime, alpha = 0.5f)
+        pill(g, ghost.name, gx, v.sy(ghost.y + 16f), 2.6f * s, Align.CENTER, 0xCC7E57C2.toInt())
     }
 
-    private fun drawParticles(c: Canvas, world: GameWorld) {
-        for (p in world.particles) {
-            fill.color = p.color
-            fill.alpha = (255 * (p.life / p.maxLife)).toInt().coerceIn(0, 255)
-            c.drawCircle(sx(p.x), sy(p.y), p.size * s, fill)
+    private fun drawParticles(g: Gfx, w: GameWorld) {
+        val s = v.s
+        for (pt in w.particles) {
+            val a = (pt.life / pt.maxLife).coerceIn(0f, 1f)
+            val x = v.sx(pt.x)
+            val y = v.sy(pt.y)
+            if (pt.size > 1.1f) world.sparkleBurst(g, x, y, pt.size * s * 1.3f, Colors.withAlpha(pt.color, a))
+            else g.fillCircle(x, y, pt.size * s, Colors.withAlpha(pt.color, a))
         }
-        fill.alpha = 255
-        text.textAlign = Paint.Align.CENTER
-        for (t in world.texts) {
-            text.textSize = 4f * s
-            text.alpha = (255 * t.life.coerceIn(0f, 1f)).toInt()
-            outlinedText(c, t.text, sx(t.x), sy(t.y), t.color)
+        for (t in w.texts) {
+            val a = t.life.coerceIn(0f, 1f)
+            g.save(); g.multiplyAlpha(a)
+            val pop = 1f + max(0f, t.life - 0.8f) * 1.5f
+            g.text(t.text, v.sx(t.x), v.sy(t.y), 3.8f * s * pop, t.color, Align.CENTER, outline = 0xDD2A1A12.toInt(), outlineWidth = 0.8f * s)
+            g.restore()
         }
-        text.alpha = 255
+    }
+
+    // ------------------------------------------------------------------ coach
+
+    private fun drawHint(g: Gfx, w: GameWorld, vp: Box) {
+        if (w.hint == Hint.NONE || w.state != RunState.RUNNING) return
+        val s = v.s
+        val u = min(vp.w, vp.h) / 100f
+        val t = w.animTime
+        val bounce = abs(sin(t * 7f)) * 1.2f * s
+        val target = w.hintHazard
+        val color = when (w.hint) {
+            Hint.JUMP -> 0xFF43A047.toInt()
+            Hint.SLIDE -> 0xFF1E88E5.toInt()
+            else -> 0xFFAB47BC.toInt()
+        }
+        if (target != null) {
+            val hx = v.sx(target.x + target.w / 2f)
+            val top = if (target.kind == HazardKind.OVERHEAD) v.sy(target.y) + 7f * s else v.sy(max(target.y + target.h, 8f)) - 6f * s
+            val y = top - bounce
+            val r = 3.4f * s
+            g.fillCircle(hx, y, r + 0.4f * s, 0xFFFFFFFF.toInt())
+            g.fillCircle(hx, y, r, color)
+            arrow(g, hx, y, r * 0.6f, up = w.hint == Hint.JUMP)
+            g.text(if (w.hint == Hint.JUMP) "JUMP!" else "SLIDE!", hx, y - r - 1.2f * s, 3.2f * s, 0xFFFFFFFF.toInt(), Align.CENTER, outline = color, outlineWidth = 0.9f * s)
+        }
+        // Ring on the matching button
+        val btn = when (w.hint) {
+            Hint.JUMP -> Button.JUMP
+            Hint.SLIDE -> Button.SLIDE
+            Hint.ABILITY -> Button.ABILITY
+            Hint.NONE -> return
+        }
+        button(btn, vp, tmp)
+        val k = (t * 1.6f) % 1f
+        g.strokeCircle(tmp.cx, tmp.cy, tmp.w / 2f * (1f + k * 0.45f), 1.2f * u, Colors.withAlpha(0xFFFFFFFF.toInt(), 1f - k))
+        g.strokeCircle(tmp.cx, tmp.cy, tmp.w / 2f + 0.6f * u, 0.8f * u, color)
+        if (w.tutorialActive || w.hint == Hint.ABILITY) {
+            val msg = when (w.hint) {
+                Hint.JUMP -> "Tap JUMP — or tap anywhere / swipe up"
+                Hint.SLIDE -> "Tap SLIDE — or swipe down"
+                else -> "Ability ready! Tap to use ${w.animal.ability.displayName}"
+            }
+            pill(g, msg, vp.cx, v.groundY - (if (portrait(vp)) 40f else 46f) * s, 3.4f * u, Align.CENTER, Colors.withAlpha(color, 0.92f))
+            hand(g, tmp.cx + tmp.w * 0.2f, tmp.cy + tmp.h * 0.15f - abs(sin(t * 5f)) * 2f * u, 7f * u)
+        }
+    }
+
+    private fun arrow(g: Gfx, x: Float, y: Float, r: Float, up: Boolean) {
+        val d = if (up) -1f else 1f
+        p.reset().moveTo(x, y + d * r).lineTo(x + r, y).lineTo(x + r * 0.4f, y).lineTo(x + r * 0.4f, y - d * r)
+            .lineTo(x - r * 0.4f, y - d * r).lineTo(x - r * 0.4f, y).lineTo(x - r, y).close()
+        g.fillPath(p, 0xFFFFFFFF.toInt())
+    }
+
+    private fun hand(g: Gfx, x: Float, y: Float, size: Float) {
+        val skin = 0xFFFFD7B5.toInt()
+        val ink = 0xFF2A1A12.toInt()
+        g.save(); g.translate(x, y); g.scale(size / 10f, size / 10f); g.rotate(-15f)
+        g.fillRoundRect(-2.6f, -1f, 2.6f, 6f, 2f, ink)
+        g.fillRoundRect(-2.3f, -0.7f, 2.3f, 5.7f, 1.8f, skin)
+        g.fillRoundRect(-1.1f, -7.3f, 1.1f, 1f, 1.1f, ink)
+        g.fillRoundRect(-0.85f, -7f, 0.85f, 0.8f, 0.85f, skin)
+        g.restore()
     }
 
     // ------------------------------------------------------------------ HUD
 
-    private fun outlinedText(c: Canvas, str: String, x: Float, y: Float, color: Int) {
-        textOutline.textSize = text.textSize
-        textOutline.textAlign = text.textAlign
-        textOutline.strokeWidth = text.textSize * 0.16f
-        textOutline.alpha = text.alpha
-        c.drawText(str, x, y, textOutline)
-        val a = text.alpha
-        text.color = color
-        text.alpha = a
-        c.drawText(str, x, y, text)
+    private fun pill(g: Gfx, text: String, x: Float, y: Float, size: Float, align: Align, bg: Int) {
+        val tw = g.textWidth(text, size)
+        val padX = size * 0.6f
+        val l = when (align) {
+            Align.LEFT -> x
+            Align.CENTER -> x - tw / 2f - padX
+            Align.RIGHT -> x - tw - padX * 2
+        }
+        g.fillRoundRect(l, y - size * 1.05f, l + tw + padX * 2, y + size * 0.45f, size * 0.75f, bg)
+        g.text(text, l + padX, y, size, 0xFFFFFFFF.toInt())
     }
 
-    /** Ability button rect for a viewport — shared with input handling. */
-    fun abilityButton(viewport: RectF, out: RectF): RectF {
-        val sc = viewport.height() / 100f
-        val r = 9f * sc
-        val cx = viewport.right - 14f * sc
-        val cy = viewport.bottom - 13f * sc
-        out.set(cx - r, cy - r, cx + r, cy + r)
-        return out
-    }
+    private fun drawHud(g: Gfx, w: GameWorld, vp: Box, style: ViewportStyle) {
+        val u = min(vp.w, vp.h) / 100f
+        val pad = 3f * u
+        val panel = 0x99102A1C.toInt()
 
-    fun pauseButton(viewport: RectF, out: RectF): RectF {
-        val sc = viewport.height() / 100f
-        val r = 5.5f * sc
-        val cx = viewport.right - 9f * sc
-        val cy = viewport.top + 9f * sc
-        out.set(cx - r, cy - r, cx + r, cy + r)
-        return out
-    }
-
-    private val btn = RectF()
-
-    private fun drawHud(c: Canvas, world: GameWorld, style: ViewportStyle) {
         // Danger vignette when the chaser is close
-        if (world.chase > 0.45f && world.state == RunState.RUNNING) {
-            val k = ((world.chase - 0.45f) / 0.55f).coerceIn(0f, 1f)
-            val a = ((0.25f + 0.2f * sin(world.animTime * 10f)) * k * 255).toInt()
-            fill.shader = LinearGradient(vp.left, 0f, vp.left + vp.width() * 0.25f, 0f, (a shl 24) or 0xD50000, 0x00D50000, Shader.TileMode.CLAMP)
-            c.drawRect(vp.left, vp.top, vp.left + vp.width() * 0.25f, vp.bottom, fill)
-            fill.shader = null
+        if (w.chase > 0.45f && w.state == RunState.RUNNING) {
+            val k = ((w.chase - 0.45f) / 0.55f).coerceIn(0f, 1f)
+            val a = (0.18f + 0.12f * sin(w.animTime * 10f)) * k
+            g.fillRect(vp.l, vp.t, vp.l + vp.w * 0.22f, vp.b, 0, dangerGrad(vp, Colors.withAlpha(0xFFE53935.toInt(), a)))
         }
 
-        val pad = 4f * s
-        text.textAlign = Paint.Align.LEFT
-        text.textSize = 7f * s
-        outlinedText(c, world.score.toString(), vp.left + pad, vp.top + pad + 6f * s, 0xFFFFFFFF.toInt())
-        text.textSize = 4f * s
-        outlinedText(c, "${world.meters} m", vp.left + pad, vp.top + pad + 11.5f * s, 0xFFE0F7FA.toInt())
+        // Score panel
+        val scoreSize = 7.5f * u
+        val sw = max(g.textWidth(w.score.toString(), scoreSize), 18f * u)
+        g.fillRoundRect(vp.l + pad, vp.t + pad, vp.l + pad + sw + 5f * u, vp.t + pad + 15f * u, 4f * u, panel)
+        g.text(w.score.toString(), vp.l + pad + 2.5f * u, vp.t + pad + 8.2f * u, scoreSize, 0xFFFFFFFF.toInt())
+        g.text("${w.meters} m", vp.l + pad + 2.5f * u, vp.t + pad + 12.8f * u, 3.4f * u, 0xFFB9F6CA.toInt(), bold = true)
 
-        // Food & coins
-        val fx = vp.left + pad + 2.5f * s
-        val fy = vp.top + pad + 16.5f * s
-        drawFood(c, world.animal.food, fx, fy, 1.6f * s, 255, false)
-        outlinedText(c, "${world.food}", fx + 3.5f * s, fy + 1.4f * s, 0xFFFFF59D.toInt())
-        fill.color = 0xFFFFC107.toInt()
-        c.drawCircle(fx + 17f * s, fy, 1.6f * s, fill)
-        outlinedText(c, "${world.coins}", fx + 19.5f * s, fy + 1.4f * s, 0xFFFFE082.toInt())
-        if (world.gems > 0) {
-            gem(c, fx + 33f * s, fy, 1.6f * s, 255)
-            outlinedText(c, "${world.gems}", fx + 35.5f * s, fy + 1.4f * s, 0xFF81D4FA.toInt())
+        // Food & coins pill
+        val fx = vp.l + pad + sw + 7f * u
+        val pillW = 34f * u + (if (w.gems > 0) 12f * u else 0f)
+        g.fillRoundRect(fx, vp.t + pad, fx + pillW, vp.t + pad + 8f * u, 4f * u, panel)
+        g.save(); g.translate(fx + 4f * u, vp.t + pad + 4f * u); g.scale(2.4f * u); world.food(g, w.animal.food, false, w.animTime); g.restore()
+        g.text("${w.food}", fx + 7.5f * u, vp.t + pad + 5.6f * u, 4f * u, 0xFFFFF59D.toInt())
+        g.fillCircle(fx + 20f * u, vp.t + pad + 4f * u, 2.3f * u, 0xFFFFC107.toInt())
+        g.fillCircle(fx + 20f * u, vp.t + pad + 4f * u, 1.4f * u, 0xFFFFE082.toInt())
+        g.text("${w.coins}", fx + 23.5f * u, vp.t + pad + 5.6f * u, 4f * u, 0xFFFFE082.toInt())
+        if (w.gems > 0) {
+            g.save(); g.translate(fx + 37f * u, vp.t + pad + 4f * u); g.scale(2.2f * u); world.gem(g, w.animTime); g.restore()
+            g.text("${w.gems}", fx + 40f * u, vp.t + pad + 5.6f * u, 4f * u, 0xFF81D4FA.toInt())
         }
 
-        // Active power-up timers
-        var ty = fy + 6f * s
-        fun timer(label: String, t: Float, max: Float, color: Int) {
+        // Chaser proximity meter
+        val mx = fx
+        val my = vp.t + pad + 10f * u
+        val mw = 30f * u
+        g.fillRoundRect(mx, my, mx + mw, my + 4.2f * u, 2.1f * u, panel)
+        val danger = w.chase.coerceIn(0f, 1f)
+        val barColor = Colors.mix(0xFF66BB6A.toInt(), 0xFFE53935.toInt(), danger)
+        g.fillRoundRect(mx + 0.6f * u, my + 0.6f * u, mx + 0.6f * u + (mw - 1.2f * u) * max(0.08f, danger), my + 3.6f * u, 1.5f * u, barColor)
+        g.text(w.animal.chaser.displayName, mx + 1.6f * u, my + 3.2f * u, 2.6f * u, 0xFFFFFFFF.toInt())
+
+        // Active power-up timers as rings
+        var tx = vp.l + pad + 4f * u
+        val ty = vp.t + pad + 21f * u
+        fun ring(kind: Int, t: Float, max: Float) {
             if (t <= 0f) return
-            fill.color = 0x66000000
-            rect.set(vp.left + pad, ty - 1.6f * s, vp.left + pad + 24f * s, ty + 1.6f * s)
-            c.drawRoundRect(rect, 1.6f * s, 1.6f * s, fill)
-            fill.color = color
-            rect.set(vp.left + pad, ty - 1.6f * s, vp.left + pad + 24f * s * (t / max).coerceIn(0f, 1f), ty + 1.6f * s)
-            c.drawRoundRect(rect, 1.6f * s, 1.6f * s, fill)
-            text.textSize = 2.6f * s
-            outlinedText(c, label, vp.left + pad + 1.2f * s, ty + 1f * s, 0xFFFFFFFF.toInt())
-            ty += 4.4f * s
+            g.fillCircle(tx, ty, 3.6f * u, panel)
+            g.strokeArc(tx - 3.2f * u, ty - 3.2f * u, tx + 3.2f * u, ty + 3.2f * u, -90f, 360f * (t / max).coerceIn(0f, 1f), 0.8f * u, 0xFFFFFFFF.toInt())
+            g.save(); g.translate(tx, ty); g.scale(2.3f * u); world.powerUp(g, kind, 0f); g.restore()
+            tx += 9f * u
         }
-        timer("MAGNET", world.magnetTime, 18f, 0xFFE53935.toInt())
-        timer("SHIELD", world.shieldTime, 13.5f, 0xFF1E88E5.toInt())
-        timer("2X COINS", world.doublerTime, 20f, 0xFFFFB300.toInt())
-        timer(world.animal.ability.displayName.uppercase(), world.abilityTime, world.animal.ability.baseDuration * 1.75f, 0xFFAB47BC.toInt())
+        ring(0, w.magnetTime, 18f)
+        ring(1, w.shieldTime, 13.5f)
+        ring(2, w.doublerTime, 20f)
 
-        // Player label (split screen)
-        style.label?.let {
-            text.textAlign = Paint.Align.CENTER
-            text.textSize = 5f * s
-            outlinedText(c, it, vp.centerX(), vp.top + 8f * s, style.labelColor)
-        }
-        // Opponent score (online / LAN)
-        style.ghost?.let { g ->
-            text.textAlign = Paint.Align.CENTER
-            text.textSize = 3.6f * s
-            val status = if (g.alive) "${g.score}" else "${g.score} (out)"
-            outlinedText(c, "VS ${g.name}: $status", vp.centerX(), vp.top + 15f * s, 0xFFFFEB3B.toInt())
+        // Split-screen label & opponent
+        style.label?.let { pill(g, it, vp.cx, vp.t + pad + 5f * u, 3.6f * u, Align.CENTER, Colors.withAlpha(style.labelColor, 0.85f)) }
+        style.ghost?.let { gh ->
+            val status = if (gh.alive) "${gh.score}" else "${gh.score} ✖"
+            pill(g, "VS ${gh.name}: $status", vp.cx, vp.t + pad + 5f * u, 3.4f * u, Align.CENTER, 0xCC7E57C2.toInt())
         }
 
-        // Pause button
+        // Buttons
         if (style.showPause) {
-            pauseButton(vp, btn)
-            fill.color = 0x66000000
-            c.drawCircle(btn.centerX(), btn.centerY(), btn.width() / 2f, fill)
-            fill.color = 0xFFFFFFFF.toInt()
-            val bw = btn.width() * 0.12f
-            c.drawRect(btn.centerX() - bw * 2f, btn.centerY() - bw * 2.5f, btn.centerX() - bw * 0.7f, btn.centerY() + bw * 2.5f, fill)
-            c.drawRect(btn.centerX() + bw * 0.7f, btn.centerY() - bw * 2.5f, btn.centerX() + bw * 2f, btn.centerY() + bw * 2.5f, fill)
+            button(Button.PAUSE, vp, tmp)
+            g.fillCircle(tmp.cx, tmp.cy, tmp.w / 2f, panel)
+            val bw = tmp.w * 0.1f
+            g.fillRoundRect(tmp.cx - bw * 2.2f, tmp.cy - bw * 2.6f, tmp.cx - bw * 0.7f, tmp.cy + bw * 2.6f, bw * 0.5f, 0xFFFFFFFF.toInt())
+            g.fillRoundRect(tmp.cx + bw * 0.7f, tmp.cy - bw * 2.6f, tmp.cx + bw * 2.2f, tmp.cy + bw * 2.6f, bw * 0.5f, 0xFFFFFFFF.toInt())
         }
+        controlButton(g, Button.SLIDE, vp, w, false)
+        controlButton(g, Button.JUMP, vp, w, true)
+        abilityButton(g, w, vp, u)
 
-        // Ability button with charge ring
-        abilityButton(vp, btn)
-        val ready = world.abilityReady
-        fill.color = if (ready) 0xEEAB47BC.toInt() else 0x88000000.toInt()
-        val pulse = if (ready) 1f + sin(world.animTime * 8f) * 0.06f else 1f
-        c.drawCircle(btn.centerX(), btn.centerY(), btn.width() / 2f * pulse, fill)
-        stroke.color = 0xFFFFD54F.toInt()
-        stroke.strokeWidth = 1.2f * s
-        rect.set(btn)
-        rect.inset(0.6f * s, 0.6f * s)
-        c.drawArc(rect, -90f, 360f * world.abilityCharge, false, stroke)
-        drawFood(c, world.animal.food, btn.centerX(), btn.centerY() - 1f * s, 2.6f * s, 255, ready)
-        text.textAlign = Paint.Align.CENTER
-        text.textSize = 2.4f * s
-        outlinedText(c, if (ready) "TAP!" else "${(world.abilityCharge * 100).toInt()}%", btn.centerX(), btn.bottom - 1.6f * s, 0xFFFFFFFF.toInt())
-
-        // Countdown / state banners
-        text.textAlign = Paint.Align.CENTER
-        when (world.state) {
+        // Countdown / banners
+        when (w.state) {
             RunState.COUNTDOWN -> {
-                val n = kotlin.math.ceil(world.countdown).toInt()
-                text.textSize = 18f * s
-                outlinedText(c, if (n > 0) "$n" else "GO!", vp.centerX(), vp.centerY(), 0xFFFFEB3B.toInt())
-                if (world.distance < 1f) {
-                    text.textSize = 3.6f * s
-                    outlinedText(c, "Tap = Jump   •   Swipe down = Slide   •   Escape the ${world.animal.chaser.displayName}!", vp.centerX(), vp.centerY() + 10f * s, 0xFFFFFFFF.toInt())
+                val n = ceil(w.countdown).toInt()
+                val frac = w.countdown - (n - 1)
+                val pop = 1f + (frac - 0.7f).coerceAtLeast(0f) * 1.5f
+                g.text(if (n > 0) "$n" else "GO!", vp.cx, vp.cy + 6f * u, 22f * u * pop, 0xFFFFEB3B.toInt(), Align.CENTER,
+                    outline = 0xFF2A1A12.toInt(), outlineWidth = 2.2f * u)
+                if (w.distance < 1f) {
+                    pill(g, "Run from the ${w.animal.chaser.displayName}! Eat ${w.animal.food.displayName.lowercase()}s!", vp.cx, vp.cy + 16f * u, 3.6f * u, Align.CENTER, 0xCC102A1C.toInt())
                 }
             }
             RunState.DOWN, RunState.FINISHED -> {
-                text.textSize = 9f * s
                 val msg = when {
-                    world.state == RunState.FINISHED -> "FINISHED"
-                    world.cause == DeathCause.FELL -> "SPLASH!"
-                    else -> "CAUGHT BY ${world.animal.chaser.displayName.uppercase()}!"
+                    w.state == RunState.FINISHED -> "FINISHED"
+                    w.cause == DeathCause.FELL -> "SPLASH!"
+                    else -> "CAUGHT!"
                 }
-                outlinedText(c, msg, vp.centerX(), vp.centerY(), 0xFFFF7043.toInt())
+                g.text(msg, vp.cx, vp.cy, 13f * u, 0xFFFF7043.toInt(), Align.CENTER, outline = 0xFF2A1A12.toInt(), outlineWidth = 1.6f * u)
             }
             RunState.RUNNING -> Unit
         }
     }
 
-    private fun darken(color: Int): Int {
-        val r = ((color shr 16 and 0xFF) * 0.8f).toInt()
-        val g = ((color shr 8 and 0xFF) * 0.8f).toInt()
-        val b = ((color and 0xFF) * 0.8f).toInt()
-        return (0xFF shl 24) or (r shl 16) or (g shl 8) or b
+    private var dangerKey = ""
+    private var danger: Gradient? = null
+    private fun dangerGrad(vp: Box, c: Int): Gradient {
+        val key = "${vp.l}-${vp.w}-$c"
+        if (key != dangerKey) {
+            dangerKey = key
+            danger = Gradient.linear(vp.l, 0f, vp.l + vp.w * 0.22f, 0f, intArrayOf(c, c and 0x00FFFFFF), null)
+        }
+        return danger!!
+    }
+
+    private fun controlButton(g: Gfx, b: Button, vp: Box, w: GameWorld, up: Boolean) {
+        button(b, vp, tmp)
+        val r = tmp.w / 2f
+        val active = if (up) !w.onGround else w.sliding
+        val base = if (up) 0xFF43A047.toInt() else 0xFF1E88E5.toInt()
+        g.fillCircle(tmp.cx, tmp.cy + r * 0.08f, r, 0x55000000)
+        g.fillCircle(tmp.cx, tmp.cy, r, Colors.withAlpha(base, if (active) 0.95f else 0.6f))
+        g.strokeCircle(tmp.cx, tmp.cy, r * 0.92f, r * 0.06f, 0x88FFFFFF.toInt())
+        arrow(g, tmp.cx, tmp.cy - r * 0.12f, r * 0.42f, up)
+        g.text(if (up) "JUMP" else "SLIDE", tmp.cx, tmp.cy + r * 0.62f, r * 0.26f, 0xFFFFFFFF.toInt(), Align.CENTER)
+    }
+
+    private fun abilityButton(g: Gfx, w: GameWorld, vp: Box, u: Float) {
+        button(Button.ABILITY, vp, tmp)
+        val r = tmp.w / 2f
+        val ready = w.abilityReady
+        val pulse = if (ready) 1f + sin(w.animTime * 8f) * 0.06f else 1f
+        g.fillCircle(tmp.cx, tmp.cy, r * pulse, if (ready) 0xEEAB47BC.toInt() else 0x88102A1C.toInt())
+        g.strokeArc(tmp.l + r * 0.1f, tmp.t + r * 0.1f, tmp.r - r * 0.1f, tmp.b - r * 0.1f, -90f, 360f * w.abilityCharge, r * 0.14f, 0xFFFFD54F.toInt())
+        g.save(); g.translate(tmp.cx, tmp.cy - r * 0.1f); g.scale(r * 0.42f); world.food(g, w.animal.food, ready, w.animTime); g.restore()
+        g.text(if (ready) "TAP!" else "${(w.abilityCharge * 100).toInt()}%", tmp.cx, tmp.cy + r * 0.68f, r * 0.27f, 0xFFFFFFFF.toInt(), Align.CENTER)
     }
 }

@@ -7,10 +7,15 @@ import com.junglerun.game.core.Rng
  * Procedural track generator. Purely a function of (seed, biome) so every player
  * in a race sees exactly the same course.
  */
-class WorldGen(seed: Long, private val biome: Biome) {
+class WorldGen(seed: Long, private val biome: Biome, tutorial: Boolean = false) {
     private val rng = Rng(seed)
     private var nextX = 70f
     private var segment = 0
+
+    /** Hand-made opening for first-time players: two jumps, two slides, a gap, then the real game. */
+    private val script = if (tutorial) ArrayDeque(listOf(
+        HazardKind.LOW, HazardKind.LOW, HazardKind.OVERHEAD, HazardKind.OVERHEAD, HazardKind.PIT, HazardKind.LOW,
+    )) else ArrayDeque()
 
     fun ensure(until: Float, hazards: MutableList<Hazard>, pickups: MutableList<Pickup>) {
         while (nextX < until) {
@@ -24,7 +29,8 @@ class WorldGen(seed: Long, private val biome: Biome) {
         val speed = Physics.speedAt(x)
         val difficulty = (x / 4000f).coerceIn(0f, 1f)
 
-        val kind = pickKind(difficulty)
+        val scripted = script.removeFirstOrNull()
+        val kind = scripted ?: pickKind(difficulty)
         val endX: Float = when (kind) {
             HazardKind.LOW -> {
                 hazards += Hazard(kind, x, 0f, 6f, 6.5f, rng.nextInt(3))
@@ -66,7 +72,7 @@ class WorldGen(seed: Long, private val biome: Biome) {
 
         // Combo: a second hazard right after the first at higher difficulty (jump → slide etc.)
         var tail = endX
-        if (difficulty > 0.35f && rng.chance(0.18f + difficulty * 0.2f) && kind != HazardKind.PIT) {
+        if (scripted == null && difficulty > 0.35f && rng.chance(0.18f + difficulty * 0.2f) && kind != HazardKind.PIT) {
             val comboX = tail + speed * rng.range(0.55f, 0.75f)
             if (kind == HazardKind.OVERHEAD || kind == HazardKind.FLYER) {
                 hazards += Hazard(HazardKind.LOW, comboX, 0f, 6f, 6.5f, rng.nextInt(3))
@@ -78,7 +84,7 @@ class WorldGen(seed: Long, private val biome: Biome) {
         }
 
         // Gap to the next hazard scales with speed so reaction time stays fair.
-        val gapSeconds = rng.range(0.85f, 1.6f - difficulty * 0.45f)
+        val gapSeconds = if (scripted != null) 1.9f else rng.range(0.85f, 1.6f - difficulty * 0.45f)
         val gap = speed * gapSeconds + 10f
 
         // Treats between hazards

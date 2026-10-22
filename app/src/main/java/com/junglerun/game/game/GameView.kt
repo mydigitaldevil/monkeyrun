@@ -3,23 +3,25 @@ package com.junglerun.game.game
 import android.annotation.SuppressLint
 import android.content.Context
 import android.graphics.Canvas
-import android.graphics.RectF
 import android.os.Build
 import android.view.MotionEvent
 import android.view.SurfaceHolder
 import android.view.SurfaceView
+import com.junglerun.game.gfx.AndroidGfx
 import kotlin.math.abs
 
 /**
  * SurfaceView hosting the game loop: fixed-step simulation (120 Hz) + render every frame.
- * Supports multi-touch so two players can play on one device at the same time.
+ * Multi-touch: on-screen JUMP / SLIDE / ability buttons, plus tap-anywhere = jump and swipes,
+ * so two players can share one device.
  */
 @SuppressLint("ViewConstructor")
 class GameView(context: Context, private val controller: GameController) :
     SurfaceView(context), SurfaceHolder.Callback {
 
-    private val renderer = GameRenderer(resources.displayMetrics.density)
-    private val viewports = List(controller.worlds.size) { RectF() }
+    private val renderer = GameRenderer()
+    private val gfx = AndroidGfx()
+    private val viewports = List(controller.worlds.size) { Box() }
     private val styles: List<ViewportStyle>
     @Volatile private var running = false
     private var thread: Thread? = null
@@ -29,8 +31,8 @@ class GameView(context: Context, private val controller: GameController) :
         isFocusable = true
         styles = if (controller.worlds.size == 2) {
             listOf(
-                ViewportStyle("P1 • ${controller.players[0].name}", 0xFF80D8FF.toInt(), showPause = true),
-                ViewportStyle("P2 • ${controller.players[1].name}", 0xFFFF8A80.toInt(), showPause = false),
+                ViewportStyle("P1 • ${controller.players[0].name}", 0xFF29B6F6.toInt(), showPause = true),
+                ViewportStyle("P2 • ${controller.players[1].name}", 0xFFFF7043.toInt(), showPause = false),
             )
         } else {
             listOf(ViewportStyle())
@@ -94,14 +96,15 @@ class GameView(context: Context, private val controller: GameController) :
             null
         } ?: return
         try {
-            canvas.drawColor(0xFF000000.toInt())
+            canvas.drawColor(0xFF0B3D20.toInt())
+            gfx.begin(canvas)
             controller.worlds.forEachIndexed { i, w ->
                 val style = if (i == 0 && controller.ghost != null) {
                     ViewportStyle(styles[0].label, styles[0].labelColor, styles[0].showPause, controller.ghost)
                 } else {
                     styles[i]
                 }
-                renderer.draw(canvas, w, viewports[i], style)
+                renderer.draw(gfx, w, viewports[i], style)
             }
         } finally {
             try {
@@ -113,13 +116,13 @@ class GameView(context: Context, private val controller: GameController) :
 
     // ---------------------------------------------------------------- input
 
-    private class TouchTrack(var x: Float, var y: Float, var t: Long, var player: Int, var consumed: Boolean)
+    private class TouchTrack(var x: Float, var y: Float, var player: Int, var consumed: Boolean)
 
     private val touches = HashMap<Int, TouchTrack>()
-    private val hit = RectF()
+    private val hit = Box()
 
     private fun playerAt(y: Float): Int {
-        for (i in viewports.indices) if (y >= viewports[i].top && y <= viewports[i].bottom) return i
+        for (i in viewports.indices) if (y >= viewports[i].t && y <= viewports[i].b) return i
         return 0
     }
 
@@ -133,24 +136,26 @@ class GameView(context: Context, private val controller: GameController) :
                 val y = e.getY(idx)
                 val p = playerAt(y)
                 val vp = viewports[p]
-                if (renderer.abilityButton(vp, hit).contains(x, y)) {
-                    controller.ability(p)
-                    return true
-                }
-                if (styles[p].showPause && renderer.pauseButton(vp, hit).contains(x, y)) {
-                    controller.setPaused(true)
-                    post { (controllerCallbacks)?.onPauseRequested() }
-                    return true
-                }
-                val track = TouchTrack(x, y, e.eventTime, p, false)
-                touches[e.getPointerId(idx)] = track
-                // A press that hasn't turned into a swipe within ~90 ms is a jump — no need to wait for release.
-                postDelayed({
-                    if (!track.consumed) {
-                        track.consumed = true
-                        controller.jump(track.player)
+                when {
+                    renderer.button(Button.JUMP, vp, hit).contains(x, y) -> controller.jump(p)
+                    renderer.button(Button.SLIDE, vp, hit).contains(x, y) -> controller.slide(p)
+                    renderer.button(Button.ABILITY, vp, hit).contains(x, y) -> controller.ability(p)
+                    styles[p].showPause && renderer.button(Button.PAUSE, vp, hit).contains(x, y) -> {
+                        controller.setPaused(true)
+                        post { controllerCallbacks?.onPauseRequested() }
                     }
-                }, TAP_DECIDE_MS)
+                    else -> {
+                        val track = TouchTrack(x, y, p, false)
+                        touches[e.getPointerId(idx)] = track
+                        // A press that hasn't turned into a swipe within ~90 ms is a jump.
+                        postDelayed({
+                            if (!track.consumed) {
+                                track.consumed = true
+                                controller.jump(track.player)
+                            }
+                        }, TAP_DECIDE_MS)
+                    }
+                }
             }
             MotionEvent.ACTION_MOVE -> {
                 for (i in 0 until e.pointerCount) {

@@ -42,7 +42,15 @@ interface WorldListener {
     fun onSmash() {}
     fun onAbility() {}
     fun onDown(cause: DeathCause) {}
+    fun onLand() {}
+    fun onChaserClose() {}
+    fun onTutorialComplete() {}
 }
+
+enum class CoachLevel { NONE, HINTS, TUTORIAL }
+
+/** What the coach wants the player to do right now. */
+enum class Hint { NONE, JUMP, SLIDE, ABILITY }
 
 /**
  * Simulation for one runner. Pure game logic, no Android UI — rendering lives in [GameRenderer].
@@ -54,9 +62,11 @@ class GameWorld(
     private val loadout: Loadout,
     countdown: Float = 3f,
     var listener: WorldListener? = null,
+    /** How much help to give: full tutorial (slow-mo until you act), hint bubbles, or none. */
+    val coach: CoachLevel = CoachLevel.NONE,
 ) {
     val biome = animal.biome
-    private val gen = WorldGen(seed, biome)
+    private val gen = WorldGen(seed, biome, tutorial = coach == CoachLevel.TUTORIAL)
 
     val hazards = ArrayList<Hazard>()
     val pickups = ArrayList<Pickup>()
@@ -92,7 +102,7 @@ class GameWorld(
         private set
 
     // Chaser: 1 = right behind you, 0 = far away
-    var chase = 0.85f
+    var chase = if (coach == CoachLevel.TUTORIAL) 0.4f else 0.85f
         private set
 
     // Effects (seconds remaining)
@@ -134,6 +144,25 @@ class GameWorld(
 
     /** Width of the visible world in units; set by the renderer so screen-wide abilities know their reach. */
     var viewAhead = 140f
+
+    // Coach / tutorial
+    var hint = Hint.NONE
+        private set
+    var hintHazard: Hazard? = null
+        private set
+    /** Simulation speed (drops to slow-motion while the tutorial waits for the right move). */
+    var timeScale = 1f
+        private set
+    var tutorialActive = coach == CoachLevel.TUTORIAL
+        private set
+    private val passed = IntArray(HazardKind.entries.size)
+    private val hintedKinds = BooleanArray(HazardKind.entries.size)
+    private var abilityHintShown = false
+    private var wasClose = false
+    var landTime = 0f
+        private set
+    var happyTime = 0f
+        private set
 
     val sliding: Boolean get() = slideTime > 0f
     val height: Float get() = if (sliding) Physics.SLIDE_H else Physics.PLAYER_H
@@ -186,6 +215,7 @@ class GameWorld(
 
     fun useAbility(): Boolean {
         if (!abilityReady) return false
+        abilityHintShown = true
         abilityCharge = 0f
         abilitiesUsed++
         abilityTime = animal.ability.baseDuration * (1f + loadout.abilityLevel * 0.15f)
@@ -215,7 +245,8 @@ class GameWorld(
 
     // ---------------------------------------------------------------- update
 
-    fun update(dt: Float) {
+    fun update(realDt: Float) {
+        val dt = realDt * timeScale
         animTime += dt
         updateParticles(dt)
         when (state) {
@@ -228,6 +259,9 @@ class GameWorld(
             RunState.RUNNING -> Unit
         }
         runTime += dt
+        landTime = max(0f, landTime - dt)
+        happyTime = max(0f, happyTime - dt)
+        updateCoach(realDt)
 
         // Speed
         speedFactor = min(1f, speedFactor + dt * 0.5f)
@@ -249,6 +283,9 @@ class GameWorld(
         stumbleFlash = max(0f, stumbleFlash - dt)
         if (onGround) slideTime = max(0f, slideTime - dt)
         chase = max(0f, chase - dt * 0.085f)
+        val close = chase > 0.55f
+        if (close && !wasClose) listener?.onChaserClose()
+        wasClose = close
 
         updateRunner(dt)
         if (state != RunState.RUNNING) return
@@ -268,7 +305,11 @@ class GameWorld(
         val ground = groundUnder(distance)
         if (y <= 0f) {
             if (ground) {
-                if (!onGround && vy < -40f) puff(distance, 0f, biome.groundTop, 3)
+                if (!onGround && vy < -40f) {
+                    puff(distance, 0f, biome.groundTop, 3)
+                    landTime = 0.16f
+                    listener?.onLand()
+                }
                 y = 0f
                 vy = 0f
                 onGround = true
@@ -276,7 +317,7 @@ class GameWorld(
                 fastFall = false
             } else {
                 onGround = false
-                if (invincible || (abilityActive && animal.ability == Ability.STOMP)) {
+                if (invincible || tutorialActive || (abilityActive && animal.ability == Ability.STOMP)) {
                     // Protected runners bounce over gaps instead of falling in.
                     if (y < -1f) {
                         vy = Physics.JUMP_VELOCITY
@@ -361,7 +402,7 @@ class GameWorld(
     private fun stumble(h: Hazard) {
         h.active = false
         puff(h.x, h.y + min(h.h, 10f) / 2f, 0xFFFFFFFF.toInt(), 8)
-        if (chase >= 0.45f) {
+        if (chase >= 0.45f && !tutorialActive) {
             goDown(DeathCause.CAUGHT)
         } else {
             chase = 1f
@@ -427,6 +468,7 @@ class GameWorld(
                 bonusScore += 50
                 abilityCharge = min(1f, abilityCharge + 0.15f)
                 texts += FloatingText(p.x, p.y + 3f, "+$c", 0xFFFFD700.toInt())
+                happyTime = 1.2f
             }
             PickupKind.GEM -> {
                 gems++
@@ -510,6 +552,74 @@ class GameWorld(
         }
     }
 
+    // ---------------------------------------------------------------- coach
+
+    private fun nextHazard(): Hazard? {
+        var best: Hazard? = null
+        for (h in hazards) {
+            if (!h.active || h.smashed) continue
+            if (h.x + h.w < distance - 1f) continue
+            if (h.x - distance > 120f) continue
+            if (best == null || h.x < best.x) best = h
+        }
+        return best
+    }
+
+    private fun updateCoach(realDt: Float) {
+        // Count obstacles cleared (for the tutorial's "you've got it" check)
+        for (h in hazards) {
+            if (!h.triggered && h.active && !h.smashed && h.x + h.w < distance - 3f && h.kind != HazardKind.FALLING) {
+                h.triggered = true
+                passed[h.kind.ordinal]++
+            }
+        }
+        if (tutorialActive && passed[HazardKind.LOW.ordinal] >= 2 && passed[HazardKind.OVERHEAD.ordinal] >= 2 &&
+            passed[HazardKind.PIT.ordinal] >= 1
+        ) {
+            tutorialActive = false
+            texts += FloatingText(distance + 10f, 24f, "GREAT! YOU'RE A NATURAL!", 0xFFFFEB3B.toInt(), 2f)
+            listener?.onTutorialComplete()
+        }
+
+        var wanted = Hint.NONE
+        var target: Hazard? = null
+        if (coach != CoachLevel.NONE) {
+            val h = nextHazard()
+            if (h != null) {
+                val dx = h.x - distance
+                val lead = speed * 0.75f + 8f
+                val needed = if (h.kind == HazardKind.OVERHEAD || h.kind == HazardKind.FLYER) Hint.SLIDE else Hint.JUMP
+                val showFor = tutorialActive || !hintedKinds[h.kind.ordinal]
+                if (showFor && dx < lead && dx > -h.w) {
+                    val done = if (needed == Hint.SLIDE) sliding else !onGround
+                    if (!done) {
+                        wanted = needed
+                        target = h
+                    } else if (!tutorialActive) {
+                        hintedKinds[h.kind.ordinal] = true
+                    }
+                }
+            }
+            if (wanted == Hint.NONE && abilityReady && !abilityHintShown) wanted = Hint.ABILITY
+        }
+        hint = wanted
+        hintHazard = target
+
+        // Tutorial: slow time right before the obstacle until the player reacts.
+        val slow = tutorialActive && target != null && (target.x - distance) < speed * 0.42f + 4f
+        val goal = if (slow) 0.12f else 1f
+        timeScale += (goal - timeScale) * (realDt * 10f).coerceAtMost(1f)
+    }
+
+    /** How the runner's face should look right now. */
+    val mood: com.junglerun.game.art.Mood
+        get() = when {
+            state == RunState.DOWN -> com.junglerun.game.art.Mood.HURT
+            abilityActive || happyTime > 0f -> com.junglerun.game.art.Mood.HAPPY
+            chase > 0.55f || hint != Hint.NONE && tutorialActive -> com.junglerun.game.art.Mood.SCARED
+            else -> com.junglerun.game.art.Mood.NORMAL
+        }
+
     // ---------------------------------------------------------------- revive / results
 
     /** Second chance after a rewarded ad or gems: clears the danger and grants a short shield. */
@@ -525,6 +635,7 @@ class GameWorld(
         speedFactor = 0.7f
         reviveShield = 3f
         cause = null
+        timeScale = 1f
         state = RunState.COUNTDOWN
         countdown = 1.5f
     }

@@ -1,6 +1,5 @@
 package com.junglerun.game.game
 
-import android.graphics.RectF
 import com.junglerun.game.core.AnimalSpec
 import java.util.concurrent.ConcurrentLinkedQueue
 
@@ -123,7 +122,7 @@ class GameController(
     }
 
     /** Viewport layout: one full-screen view, or top/bottom halves for same-device 2 player. */
-    fun layout(width: Int, height: Int, out: List<RectF>) {
+    fun layout(width: Int, height: Int, out: List<Box>) {
         if (worlds.size == 1) {
             out[0].set(0f, 0f, width.toFloat(), height.toFloat())
         } else {
