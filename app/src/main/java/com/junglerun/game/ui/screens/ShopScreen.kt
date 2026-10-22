@@ -4,6 +4,8 @@ import android.app.Activity
 import android.widget.Toast
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -45,6 +47,7 @@ import com.junglerun.game.ui.components.GameButton
 import com.junglerun.game.ui.components.JungleBackground
 import com.junglerun.game.ui.components.Panel
 import com.junglerun.game.ui.components.TopBar
+import com.junglerun.game.ui.components.AdaptiveRow
 import com.junglerun.game.ui.components.formatNumber
 import com.junglerun.game.ui.theme.JungleColors
 import kotlinx.coroutines.launch
@@ -69,7 +72,7 @@ fun ShopScreen(container: AppContainer, activity: Activity, onBack: () -> Unit) 
     JungleBackground {
         Column(Modifier.fillMaxSize()) {
             TopBar("Shop", profile.coins, profile.gems, onBack)
-            Row(Modifier.padding(horizontal = 16.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Row(Modifier.padding(horizontal = 16.dp).horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 ShopTab.entries.forEach { t ->
                     Text(
                         t.title,
@@ -201,12 +204,12 @@ private fun ProductCard(p: StoreProduct, price: String, owned: Boolean, onBuy: (
 private fun FreeTab(container: AppContainer, activity: Activity) {
     val ready by container.ads.rewardedAvailable.collectAsState()
     var used by remember { mutableIntStateOf(freeRewardsThisSession) }
-    Row(Modifier.fillMaxWidth().padding(16.dp), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-        listOf(
-            Triple("Free Coins", "Watch a short video for 150 coins", AdPlacement.FREE_COINS),
-            Triple("Free Gems", "Watch a short video for 2 gems", AdPlacement.FREE_GEMS),
-        ).forEach { (title, desc, placement) ->
-            Panel(Modifier.weight(1f)) {
+    AdaptiveRow(Modifier.fillMaxWidth().padding(16.dp), panels = listOf(
+        Triple("Free Coins", "Watch a short video for 150 coins", AdPlacement.FREE_COINS),
+        Triple("Free Gems", "Watch a short video for 2 gems", AdPlacement.FREE_GEMS),
+    ).map { (title, desc, placement) ->
+        @Composable { pm: Modifier ->
+            Panel(pm) {
                 Text(title, color = Color.White, fontWeight = FontWeight.Black, fontSize = 18.sp)
                 Text(desc, color = Color(0xFFC8E6C9))
                 Text("${FREE_REWARD_LIMIT - used} left this session", color = JungleColors.Banana, fontSize = 12.sp)
@@ -226,5 +229,5 @@ private fun FreeTab(container: AppContainer, activity: Activity) {
                 }
             }
         }
-    }
+    })
 }

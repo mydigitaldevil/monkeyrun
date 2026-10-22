@@ -34,6 +34,8 @@ import com.junglerun.game.ui.components.JungleBackground
 import com.junglerun.game.ui.components.Panel
 import com.junglerun.game.ui.components.ProgressRow
 import com.junglerun.game.ui.components.TopBar
+import com.junglerun.game.ui.components.AdaptiveRow
+import com.junglerun.game.ui.components.landscapeScroll
 import com.junglerun.game.ui.theme.JungleColors
 
 @Composable
@@ -44,9 +46,9 @@ fun MissionsScreen(container: AppContainer, activity: Activity, onBack: () -> Un
     JungleBackground {
         Column(Modifier.fillMaxSize()) {
             TopBar("Missions", profile.coins, profile.gems, onBack)
-            Row(Modifier.fillMaxSize().padding(horizontal = 16.dp, vertical = 4.dp), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+            AdaptiveRow(Modifier.fillMaxSize().padding(horizontal = 16.dp, vertical = 4.dp), panels = listOf(@Composable { pm: Modifier ->
                 // Missions + daily challenge
-                Column(Modifier.weight(1f).fillMaxHeight().verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                Column(pm.landscapeScroll(), verticalArrangement = Arrangement.spacedBy(10.dp)) {
                     Panel(Modifier.fillMaxWidth()) {
                         Text("MISSION SET ${profile.missionSet + 1}", color = JungleColors.Banana, fontWeight = FontWeight.Black)
                         Text("Complete all 3 to raise your score multiplier to ${profile.scoreMultiplier + 1}x", color = Color(0xFFC8E6C9), fontSize = 12.sp)
@@ -103,8 +105,9 @@ fun MissionsScreen(container: AppContainer, activity: Activity, onBack: () -> Un
                         }
                     }
                 }
+            }, @Composable { pm: Modifier ->
                 // Achievements
-                Column(Modifier.weight(1f).fillMaxHeight().verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Column(pm.landscapeScroll(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     Text("ACHIEVEMENTS", color = JungleColors.Banana, fontWeight = FontWeight.Black)
                     Achievements.all.forEach { a ->
                         val value = a.stat(profile)
@@ -121,7 +124,7 @@ fun MissionsScreen(container: AppContainer, activity: Activity, onBack: () -> Un
                         }
                     }
                 }
-            }
+            }))
         }
     }
 }

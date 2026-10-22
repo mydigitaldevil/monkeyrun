@@ -50,6 +50,7 @@ import com.junglerun.game.core.Animals
 import com.junglerun.game.data.Economy
 import com.junglerun.game.data.MissionLogic
 import com.junglerun.game.data.RunReward
+import com.junglerun.game.game.CoachLevel
 import com.junglerun.game.game.GameCallbacks
 import com.junglerun.game.game.GameController
 import com.junglerun.game.game.GameMode
@@ -63,6 +64,8 @@ import com.junglerun.game.ui.components.AnimalPortrait
 import com.junglerun.game.ui.components.GameButton
 import com.junglerun.game.ui.components.NativeAdCard
 import com.junglerun.game.ui.components.Panel
+import com.junglerun.game.ui.components.LeagueBadge
+import com.junglerun.game.ui.components.isPortrait
 import com.junglerun.game.ui.theme.JungleColors
 import kotlin.random.Random
 
@@ -75,6 +78,9 @@ fun GameScreen(
     onExit: () -> Unit,
     onRestart: () -> Unit,
     onShop: () -> Unit,
+    trialAnimal: String? = null,
+    onTrial: (animalId: String) -> Unit = {},
+    onAnimals: () -> Unit = {},
 ) {
     val repo = container.repository
     val networked = mode == GameMode.ONLINE || mode == GameMode.LAN
@@ -87,6 +93,7 @@ fun GameScreen(
     var paused by remember { mutableStateOf(false) }
     var reward by remember { mutableStateOf<RunReward?>(null) }
     var doubled by remember { mutableStateOf(false) }
+    var suggestion by remember { mutableStateOf<com.junglerun.game.core.AnimalSpec?>(null) }
 
     val profileAtStart = remember { repo.current }
     val seed = remember { room?.state?.value?.seed ?: Random.nextLong() }
@@ -105,6 +112,10 @@ fun GameScreen(
                 main.post { paused = true }
             }
 
+            override fun onTutorialComplete() {
+                main.post { repo.markTutorialDone() }
+            }
+
             override fun onNetworkTick(world: GameWorld) {
                 room?.sendState(world, alive = world.state == RunState.RUNNING || world.state == RunState.COUNTDOWN)
             }
@@ -113,7 +124,7 @@ fun GameScreen(
 
     val controller = remember {
         val loadout = repo.loadoutFor(profileAtStart)
-        val me = Animals.get(profileAtStart.selected)
+        val me = Animals.get(trialAnimal ?: profileAtStart.selected)
         val players = if (mode == GameMode.LOCAL_2P) {
             listOf(
                 PlayerSetup("Player 1", me, loadout),
@@ -123,7 +134,13 @@ fun GameScreen(
             listOf(PlayerSetup(profileAtStart.settings.playerName, me, loadout))
         }
         container.analytics.runStart(mode.name.lowercase(), me.id)
-        GameController(mode, players, seed, callbacks, container.sound)
+        val coach = when {
+            mode != GameMode.SOLO -> CoachLevel.NONE
+            !profileAtStart.tutorialDone -> CoachLevel.TUTORIAL
+            profileAtStart.totalRuns < 8 -> CoachLevel.HINTS
+            else -> CoachLevel.NONE
+        }
+        GameController(mode, players, seed, callbacks, container.sound, coach)
     }
 
     // Networked races: stream the rival's ghost into the engine; no revives (fair race).
@@ -145,6 +162,7 @@ fun GameScreen(
         onDispose {
             lifecycleOwner.lifecycle.removeObserver(obs)
             container.ads.inGameplay = false
+            container.sound.menuMusic()
         }
     }
 
@@ -170,9 +188,15 @@ fun GameScreen(
         val mine = results[0]
         container.analytics.runEnd(mode.name.lowercase(), mine.animalId, mine.score, mine.distanceMeters, mine.food)
         when (mode) {
-            GameMode.SOLO -> reward = repo.applyRun(mine)
+            GameMode.SOLO -> {
+                val r = repo.applyRun(mine, mode = if (trialAnimal != null) "trial" else "solo")
+                reward = r
+                if (r.newBest) container.sound.newBest()
+                if (trialAnimal == null) suggestion = repo.animalToSuggest()
+                container.syncScores()
+            }
             GameMode.LOCAL_2P -> {
-                reward = repo.applyRun(mine)
+                reward = repo.applyRun(mine, mode = "local")
                 repo.addCoins(results.drop(1).sumOf { it.coins })
             }
             else -> room?.markResults()
@@ -225,6 +249,17 @@ fun GameScreen(
                     container, activity, results[0], reward, doubled,
                     onDouble = { doubled = true },
                     onRetry = onRestart, onHome = onExit, onShop = onShop,
+                    suggestion = suggestion,
+                    onTry = { id ->
+                        repo.markTryPromptShown()
+                        onTrial(id)
+                    },
+                    onDismissSuggestion = {
+                        repo.markTryPromptShown()
+                        suggestion = null
+                    },
+                    trial = trialAnimal != null && trialAnimal !in repo.current.owned,
+                    onAnimals = onAnimals,
                 )
                 GameMode.LOCAL_2P -> LocalResults(controller, results, onRetry = onRestart, onHome = onExit)
                 else -> RaceResults(container, results[0], onRematch = {
@@ -325,20 +360,28 @@ private fun StatLine(label: String, value: String, color: Color = Color.White) {
 private fun SoloResults(
     container: AppContainer, activity: Activity, r: RunResult, reward: RunReward?, doubled: Boolean,
     onDouble: () -> Unit, onRetry: () -> Unit, onHome: () -> Unit, onShop: () -> Unit,
+    suggestion: com.junglerun.game.core.AnimalSpec?, onTry: (String) -> Unit, onDismissSuggestion: () -> Unit,
+    trial: Boolean, onAnimals: () -> Unit,
 ) {
     val adReady by container.ads.rewardedAvailable.collectAsState()
+    val profile by container.repository.profile.collectAsState()
     val animal = Animals.get(r.animalId)
+    val portrait = isPortrait()
     Scrim {
-        Row(Modifier.padding(16.dp), horizontalArrangement = Arrangement.spacedBy(16.dp), verticalAlignment = Alignment.CenterVertically) {
-            Panel(Modifier.width(360.dp).verticalScroll(rememberScrollState())) {
+        val summary: @Composable (Modifier) -> Unit = { m ->
+            Panel(m) {
                 Text(
-                    if (reward?.newBest == true) "NEW BEST!" else if (r.cause == null) "RUN OVER" else "CAUGHT!",
+                    if (reward?.newBest == true) "🎉 NEW BEST!" else if (r.cause == null) "RUN OVER" else "CAUGHT!",
                     style = MaterialTheme.typography.headlineMedium,
                     color = if (reward?.newBest == true) JungleColors.Banana else Color.White,
                     modifier = Modifier.fillMaxWidth(), textAlign = TextAlign.Center,
                 )
                 Text("${r.score}", fontSize = 44.sp, fontWeight = FontWeight.Black, color = Color.White,
                     modifier = Modifier.fillMaxWidth(), textAlign = TextAlign.Center)
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.Center) {
+                    LeagueBadge(profile.league, rank = profile.weeklyRank)
+                }
+                Spacer(Modifier.height(6.dp))
                 StatLine("Distance", "${r.distanceMeters} m")
                 StatLine("${animal.food.displayName} eaten", "${r.food}")
                 StatLine("Coins", "+${r.coins * (if (doubled) 2 else 1)}", JungleColors.Coin)
@@ -366,9 +409,43 @@ private fun SoloResults(
                 Spacer(Modifier.height(8.dp))
                 GameButton("🛒 SHOP", Modifier.fillMaxWidth(), brush = JungleColors.purpleButton, height = 44.dp, onClick = onShop)
             }
-            Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                AnimalPortrait(animal, Modifier.size(140.dp))
+        }
+        val side: @Composable (Modifier) -> Unit = { m ->
+            Column(m, horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                when {
+                    trial -> Panel(Modifier.fillMaxWidth()) {
+                        Text("Enjoyed ${animal.displayName}?", color = JungleColors.Banana, fontWeight = FontWeight.Black)
+                        AnimalPortrait(animal, Modifier.size(110.dp).align(Alignment.CenterHorizontally), mood = com.junglerun.game.art.Mood.HAPPY)
+                        GameButton("🔓 UNLOCK NOW", Modifier.fillMaxWidth(), brush = JungleColors.playButton, textColor = Color(0xFF3E2723), onClick = onAnimals)
+                    }
+                    suggestion != null -> Panel(Modifier.fillMaxWidth()) {
+                        Text("${animal.displayName.substringBefore(" ")} looks tired! 😴", color = JungleColors.Banana, fontWeight = FontWeight.Black)
+                        Text("Try ${suggestion.displayName} — eats ${suggestion.food.displayName.lowercase()}, chased by the ${suggestion.chaser.displayName.lowercase()}!",
+                            color = Color.White, fontSize = 13.sp)
+                        AnimalPortrait(suggestion, Modifier.size(110.dp).align(Alignment.CenterHorizontally), mood = com.junglerun.game.art.Mood.HAPPY)
+                        val free = suggestion.id !in profile.owned
+                        GameButton(if (free) "▶ FREE TRIAL RUN" else "▶ PLAY AS ${suggestion.displayName.substringBefore(" ").uppercase()}",
+                            Modifier.fillMaxWidth(), brush = JungleColors.playButton, textColor = Color(0xFF3E2723), pulse = true) {
+                            if (!free) container.repository.select(suggestion.id)
+                            onTry(suggestion.id)
+                        }
+                        Spacer(Modifier.height(4.dp))
+                        GameButton("Maybe later", Modifier.fillMaxWidth(), height = 38.dp, brush = JungleColors.greenButton, onClick = onDismissSuggestion)
+                    }
+                    else -> AnimalPortrait(animal, Modifier.size(140.dp), mood = if (reward?.newBest == true) com.junglerun.game.art.Mood.HAPPY else com.junglerun.game.art.Mood.HURT)
+                }
                 NativeAdCard(container.ads)
+            }
+        }
+        if (portrait) {
+            Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                summary(Modifier.fillMaxWidth())
+                side(Modifier.fillMaxWidth())
+            }
+        } else {
+            Row(Modifier.padding(16.dp), horizontalArrangement = Arrangement.spacedBy(16.dp), verticalAlignment = Alignment.CenterVertically) {
+                summary(Modifier.width(360.dp).verticalScroll(rememberScrollState()))
+                side(Modifier.width(300.dp))
             }
         }
     }
@@ -420,7 +497,8 @@ private fun RaceResults(container: AppContainer, mine: RunResult, onRematch: () 
 
     LaunchedEffect(peer) {
         if (peer != null && rewarded == null) {
-            rewarded = container.repository.applyRun(mine, wonRace = mine.score > peer.score)
+            rewarded = container.repository.applyRun(mine, wonRace = mine.score > peer.score, mode = if (state?.online == true) "online" else "lan", race = true)
+            container.syncScores()
         }
     }
 

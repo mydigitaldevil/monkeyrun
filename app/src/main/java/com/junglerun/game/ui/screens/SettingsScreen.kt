@@ -38,6 +38,8 @@ import com.junglerun.game.ui.components.GameButton
 import com.junglerun.game.ui.components.JungleBackground
 import com.junglerun.game.ui.components.Panel
 import com.junglerun.game.ui.components.TopBar
+import com.junglerun.game.ui.components.AdaptiveRow
+import com.junglerun.game.ui.components.landscapeScroll
 import com.junglerun.game.ui.theme.JungleColors
 import kotlinx.coroutines.launch
 
@@ -58,8 +60,8 @@ fun SettingsScreen(container: AppContainer, activity: Activity, onBack: () -> Un
     JungleBackground {
         Column(Modifier.fillMaxSize()) {
             TopBar("Settings", profile.coins, profile.gems, onBack)
-            Row(Modifier.fillMaxSize().padding(horizontal = 16.dp), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                Panel(Modifier.weight(1f).fillMaxHeight().verticalScroll(rememberScrollState())) {
+            AdaptiveRow(Modifier.fillMaxSize().padding(horizontal = 16.dp), panels = listOf(@Composable { pm: Modifier ->
+                Panel(pm.landscapeScroll()) {
                     SettingRow("Sound effects", s.sound) { v -> toggle { it.copy(sound = v) } }
                     SettingRow("Music", s.music) { v -> toggle { it.copy(music = v) } }
                     SettingRow("Vibration", s.haptics) { v -> toggle { it.copy(haptics = v) } }
@@ -78,7 +80,8 @@ fun SettingsScreen(container: AppContainer, activity: Activity, onBack: () -> Un
                         Toast.makeText(activity, "Saved", Toast.LENGTH_SHORT).show()
                     }
                 }
-                Panel(Modifier.weight(1f).fillMaxHeight().verticalScroll(rememberScrollState())) {
+            }, @Composable { pm: Modifier ->
+                Panel(pm.landscapeScroll()) {
                     Text("Account & privacy", color = JungleColors.Banana, fontWeight = FontWeight.Black)
                     Spacer(Modifier.height(8.dp))
                     GameButton("RESTORE PURCHASES", Modifier.fillMaxWidth(), height = 44.dp, brush = JungleColors.blueButton) {
@@ -105,7 +108,7 @@ fun SettingsScreen(container: AppContainer, activity: Activity, onBack: () -> Un
                     )
                     Text("Version ${BuildConfig.VERSION_NAME}", color = Color(0xFFA5D6A7))
                 }
-            }
+            }))
         }
     }
 }

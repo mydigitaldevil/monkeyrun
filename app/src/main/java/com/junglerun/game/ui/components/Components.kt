@@ -78,6 +78,28 @@ fun JungleBackground(content: @Composable BoxScope.() -> Unit) {
     }
 }
 
+/** Big chunky game title: thick dark outline under a warm gradient fill. */
+@Composable
+fun OutlinedTitle(text: String, size: androidx.compose.ui.unit.TextUnit, modifier: Modifier = Modifier) {
+    Box(modifier) {
+        Text(
+            text,
+            style = MaterialTheme.typography.displayLarge.copy(
+                fontSize = size,
+                drawStyle = androidx.compose.ui.graphics.drawscope.Stroke(width = 14f, join = androidx.compose.ui.graphics.StrokeJoin.Round),
+                color = Color(0xFF3E2210),
+            ),
+        )
+        Text(
+            text,
+            style = MaterialTheme.typography.displayLarge.copy(
+                fontSize = size,
+                brush = Brush.verticalGradient(listOf(Color(0xFFFFF59D), Color(0xFFFFC107), Color(0xFFFF8F00))),
+            ),
+        )
+    }
+}
+
 @Composable
 fun GameButton(
     text: String,

@@ -35,6 +35,8 @@ class ViewportStyle(
     val labelColor: Int = 0xFFFFFFFF.toInt(),
     val showPause: Boolean = true,
     val ghost: GhostState? = null,
+    /** false for the menu's live background scene. */
+    val showHud: Boolean = true,
 )
 
 enum class Button { JUMP, SLIDE, ABILITY, PAUSE }
@@ -136,8 +138,10 @@ class GameRenderer {
         drawChaser(g, w)
         drawRunner(g, w)
         drawParticles(g, w)
-        drawHint(g, w, vp)
-        drawHud(g, w, vp, style)
+        if (style.showHud) {
+            drawHint(g, w, vp)
+            drawHud(g, w, vp, style)
+        }
         g.restore()
     }
 

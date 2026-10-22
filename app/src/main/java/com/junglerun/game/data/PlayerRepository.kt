@@ -73,9 +73,13 @@ class PlayerRepository(context: Context) {
 
     // ------------------------------------------------------------------ runs
 
-    fun applyRun(r: RunResult, wonRace: Boolean = false): RunReward {
+    fun applyRun(r: RunResult, wonRace: Boolean = false, mode: String = "solo", race: Boolean = false): RunReward {
         var reward: RunReward? = null
         update { p ->
+            val record = RunRecord(
+                java.util.UUID.randomUUID().toString(), System.currentTimeMillis(), r.animalId, mode,
+                r.score, r.distanceMeters, r.food, r.durationSec, p.scoreMultiplier, if (race) wonRace else null,
+            )
             val newBest = r.score > p.bestScore
             val missions = p.missions.map { MissionLogic.apply(it, r) }
             val justDone = missions.filterIndexed { i, m -> m.done && !p.missions[i].done }
@@ -100,6 +104,10 @@ class PlayerRepository(context: Context) {
                 missions = missions,
                 daily = daily,
                 highScores = (p.highScores + r.score).sortedDescending().take(10),
+                runHistory = (listOf(record) + p.runHistory).take(100),
+                pendingScores = (p.pendingScores + record).takeLast(30),
+                sameAnimalStreak = if (p.lastAnimal == r.animalId) p.sameAnimalStreak + 1 else 1,
+                lastAnimal = r.animalId,
             )
         }
         return reward!!
@@ -198,6 +206,28 @@ class PlayerRepository(context: Context) {
             }
         }
         return ok
+    }
+
+    fun markTutorialDone() = update { if (it.tutorialDone) it else it.copy(tutorialDone = true) }
+
+    /**
+     * After many runs in a row with the same animal, suggest another one (a locked one gets a
+     * free trial run). Returns null if it's not time to ask.
+     */
+    fun animalToSuggest(p: Profile = current): AnimalSpec? {
+        if (p.sameAnimalStreak < 4 || p.totalRuns - p.lastTryPromptRun < 4) return null
+        val locked = Animals.all.firstOrNull { it.id !in p.owned && it.productId == null }
+        return locked ?: Animals.all.filter { it.id in p.owned && it.id != p.lastAnimal }.randomOrNull()
+    }
+
+    fun markTryPromptShown() = update { it.copy(lastTryPromptRun = it.totalRuns, sameAnimalStreak = 0) }
+
+    fun onScoresUploaded(ids: Set<String>, league: String?, rank: Int?) = update { p ->
+        p.copy(
+            pendingScores = p.pendingScores.filter { it.id !in ids },
+            league = league ?: p.league,
+            weeklyRank = rank ?: p.weeklyRank,
+        )
     }
 
     fun select(id: String) = update { p -> if (id in p.owned) p.copy(selected = id) else p }

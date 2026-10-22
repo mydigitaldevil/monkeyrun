@@ -9,6 +9,7 @@ import com.junglerun.game.billing.Entitlement
 import com.junglerun.game.billing.ProductKind
 import com.junglerun.game.billing.Products
 import com.junglerun.game.data.PlayerRepository
+import com.junglerun.game.net.LeaderboardClient
 import com.junglerun.game.net.RoomSession
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -23,6 +24,7 @@ class AppContainer(app: Application) {
     val sound = SoundManager(app)
     val ads = AdsManager(app, analytics) { repository.current.adsRemoved() }
     val billing = BillingManager(app, scope)
+    val leaderboard = LeaderboardClient(BuildConfig.ONLINE_SERVER_URL)
 
     /** The active multiplayer room, kept here so it survives navigation between lobby and race. */
     var room: RoomSession? = null
@@ -32,6 +34,29 @@ class AppContainer(app: Application) {
         scope.launch { billing.entitlements.collect { grant(it) } }
         billing.connect()
         applySettings()
+        syncScores()
+    }
+
+    /** Uploads queued runs to the online leaderboard; silently retries next time if offline. */
+    fun syncScores() {
+        scope.launch {
+            val p = repository.current
+            if (p.pendingScores.isEmpty()) return@launch
+            val done = HashSet<String>()
+            var league: String? = null
+            var rank: Int? = null
+            for (r in p.pendingScores) {
+                try {
+                    val res = leaderboard.submit(p.playerId, p.settings.playerName, r)
+                    done += r.id
+                    league = res.league ?: league
+                    rank = res.rank ?: rank
+                } catch (e: Exception) {
+                    break
+                }
+            }
+            if (done.isNotEmpty()) repository.onScoresUploaded(done, league, rank)
+        }
     }
 
     fun applySettings() {

@@ -2,7 +2,6 @@ package com.junglerun.game.audio
 
 import android.content.Context
 import android.media.AudioAttributes
-import android.media.MediaPlayer
 import android.media.SoundPool
 import android.os.Build
 import android.os.VibrationEffect
@@ -10,22 +9,26 @@ import android.os.Vibrator
 import android.os.VibratorManager
 import com.junglerun.game.game.FeedbackEvent
 import com.junglerun.game.game.FeedbackSink
+import java.io.DataInputStream
+import java.io.DataOutputStream
 import java.io.File
 import java.io.FileOutputStream
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
+import java.util.concurrent.ConcurrentHashMap
 import kotlin.math.PI
 import kotlin.math.exp
 import kotlin.math.sin
 import kotlin.random.Random
 
 /**
- * Sound effects and background music synthesised at first launch into small WAV files,
- * so the game ships with zero audio assets. Also handles haptic feedback.
+ * All game audio: synthesised SFX and animal voices (SoundPool), adaptive layered music
+ * ([MusicEngine]) and haptics. Everything is generated on first launch and cached on disk,
+ * so the APK ships with zero audio files.
  */
 class SoundManager(private val context: Context) : FeedbackSink {
     private val pool: SoundPool = SoundPool.Builder()
-        .setMaxStreams(8)
+        .setMaxStreams(10)
         .setAudioAttributes(
             AudioAttributes.Builder()
                 .setUsage(AudioAttributes.USAGE_GAME)
@@ -33,8 +36,10 @@ class SoundManager(private val context: Context) : FeedbackSink {
                 .build(),
         )
         .build()
-    private val ids = java.util.concurrent.ConcurrentHashMap<FeedbackEvent, Int>()
-    private var music: MediaPlayer? = null
+    private val sfx = ConcurrentHashMap<FeedbackEvent, Int>()
+    private val voices = ConcurrentHashMap<Voice, Int>()
+    private val music = MusicEngine()
+    private var musicSet: MusicSet? = null
     private val vibrator: Vibrator? = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
         (context.getSystemService(Context.VIBRATOR_MANAGER_SERVICE) as? VibratorManager)?.defaultVibrator
     } else {
@@ -47,45 +52,92 @@ class SoundManager(private val context: Context) : FeedbackSink {
     var musicEnabled = true
         set(value) {
             field = value
-            if (value) startMusic() else stopMusic()
+            music.enabled = value
         }
 
-    /** Generates the WAVs (cached on disk) and loads them. Call off the main thread. */
+    /** Generates (or loads cached) audio. Call off the main thread. */
     fun prepare() {
-        val dir = File(context.cacheDir, "sfx").apply { mkdirs() }
-        fun load(event: FeedbackEvent, name: String, gen: () -> FloatArray) {
-            val f = File(dir, "$name.wav")
-            if (!f.exists()) writeWav(f, gen())
-            ids[event] = pool.load(f.absolutePath, 1)
+        val dir = File(context.cacheDir, "audio_v2").apply { mkdirs() }
+        fun load(event: FeedbackEvent, gen: () -> FloatArray) {
+            val f = File(dir, "${event.name.lowercase()}.wav")
+            if (!f.exists()) writeWav(f, Synth.normalize(gen(), 0.8f))
+            sfx[event] = pool.load(f.absolutePath, 1)
         }
-        load(FeedbackEvent.JUMP, "jump") { sweep(320f, 760f, 0.14f, 0.5f) }
-        load(FeedbackEvent.SLIDE, "slide") { noise(0.18f, 0.25f) }
-        load(FeedbackEvent.FOOD, "food") { tone(1320f, 0.07f, 0.35f) + tone(1760f, 0.08f, 0.3f) }
-        load(FeedbackEvent.GOLDEN, "golden") { tone(1046f, 0.07f, 0.4f) + tone(1318f, 0.07f, 0.4f) + tone(1568f, 0.14f, 0.4f) }
-        load(FeedbackEvent.GEM, "gem") { tone(1568f, 0.06f, 0.4f) + tone(2093f, 0.06f, 0.4f) + tone(2637f, 0.18f, 0.35f) }
-        load(FeedbackEvent.POWERUP, "powerup") { sweep(400f, 1400f, 0.35f, 0.45f) }
-        load(FeedbackEvent.STUMBLE, "stumble") { sweep(220f, 90f, 0.25f, 0.6f) + noise(0.08f, 0.3f) }
-        load(FeedbackEvent.SMASH, "smash") { noise(0.22f, 0.55f) }
-        load(FeedbackEvent.ABILITY, "ability") { sweep(200f, 900f, 0.25f, 0.5f) + sweep(900f, 1800f, 0.2f, 0.4f) }
-        load(FeedbackEvent.DOWN, "down") { sweep(600f, 120f, 0.6f, 0.6f) }
-
-        val musicFile = File(dir, "music_v1.wav")
-        if (!musicFile.exists()) writeWav(musicFile, jungleLoop())
+        load(FeedbackEvent.JUMP) { boing() }
+        load(FeedbackEvent.SLIDE) { whoosh(0.28f) }
+        load(FeedbackEvent.FOOD) { chime(floatArrayOf(1568f, 2093f), 0.05f) }
+        load(FeedbackEvent.GOLDEN) { chime(floatArrayOf(1047f, 1319f, 1568f, 2093f), 0.06f) }
+        load(FeedbackEvent.GEM) { chime(floatArrayOf(2093f, 2637f, 3136f), 0.07f) }
+        load(FeedbackEvent.POWERUP) { chime(floatArrayOf(523f, 659f, 784f, 1047f, 1319f), 0.05f) }
+        load(FeedbackEvent.STUMBLE) { thud() }
+        load(FeedbackEvent.SMASH) { crash() }
+        load(FeedbackEvent.ABILITY) { Synth.concat(whoosh(0.3f), chime(floatArrayOf(784f, 988f, 1175f, 1568f), 0.04f), gap = 0f) }
+        load(FeedbackEvent.DOWN) { sadSlide() }
+        load(FeedbackEvent.LAND) { softThump() }
+        load(FeedbackEvent.COUNT) { chime(floatArrayOf(880f), 0.1f) }
+        load(FeedbackEvent.GO) { chime(floatArrayOf(1319f, 1760f), 0.08f) }
+        for (v in Voice.entries) {
+            val f = File(dir, "voice_${v.name.lowercase()}.wav")
+            if (!f.exists()) writeWav(f, Voices.render(v))
+            voices[v] = pool.load(f.absolutePath, 1)
+        }
+        musicSet = loadOrRenderMusic(dir)
+        music.set = musicSet
+        music.start()
     }
+
+    // ------------------------------------------------------------------ FeedbackSink
 
     override fun play(event: FeedbackEvent) {
         if (soundEnabled) {
-            ids[event]?.let { pool.play(it, 0.9f, 0.9f, 1, 0, 1f) }
+            val vol = when (event) {
+                FeedbackEvent.FOOD -> 0.45f
+                FeedbackEvent.LAND -> 0.35f
+                FeedbackEvent.SLIDE -> 0.6f
+                else -> 0.85f
+            }
+            // Slight random pitch keeps repeated sounds from getting tiring.
+            val rate = if (event == FeedbackEvent.FOOD || event == FeedbackEvent.JUMP) 0.95f + Random.nextFloat() * 0.1f else 1f
+            sfx[event]?.let { pool.play(it, vol, vol, 1, 0, rate) }
+        }
+        when (event) {
+            FeedbackEvent.DOWN -> music.playStinger(musicSet?.gameOver)
+            else -> Unit
         }
         if (hapticsEnabled) {
             when (event) {
-                FeedbackEvent.STUMBLE -> vibrate(40, 180)
-                FeedbackEvent.DOWN -> vibrate(120, 255)
-                FeedbackEvent.ABILITY, FeedbackEvent.SMASH -> vibrate(25, 120)
+                FeedbackEvent.STUMBLE -> vibrate(45, 200)
+                FeedbackEvent.DOWN -> vibrate(140, 255)
+                FeedbackEvent.ABILITY, FeedbackEvent.SMASH -> vibrate(25, 140)
+                FeedbackEvent.GEM, FeedbackEvent.POWERUP -> vibrate(15, 90)
                 else -> Unit
             }
         }
     }
+
+    override fun voice(v: Voice, volume: Float) {
+        if (!soundEnabled) return
+        voices[v]?.let { pool.play(it, volume, volume, 2, 0, 0.95f + Random.nextFloat() * 0.1f) }
+    }
+
+    override fun music(state: com.junglerun.game.game.MusicState) {
+        music.mode = if (state.running) MusicMode.RUN else MusicMode.MENU
+        music.danger = state.danger
+        music.power = state.power
+        music.tempo = 1f + state.speed01 * 0.14f
+    }
+
+    fun menuMusic() {
+        music.mode = MusicMode.MENU
+        music.danger = 0f
+        music.power = false
+        music.tempo = 1f
+    }
+
+    fun newBest() = music.playStinger(musicSet?.fanfare)
+
+    fun pauseMusic() = music.pause()
+    fun resumeMusic() = music.resume()
 
     private fun vibrate(ms: Long, amplitude: Int) {
         val v = vibrator ?: return
@@ -98,141 +150,116 @@ class SoundManager(private val context: Context) : FeedbackSink {
         }
     }
 
-    fun startMusic() {
-        if (!musicEnabled || music != null) return
-        val f = File(File(context.cacheDir, "sfx"), "music_v1.wav")
-        if (!f.exists()) return
-        music = try {
-            MediaPlayer().apply {
-                setDataSource(f.absolutePath)
-                isLooping = true
-                setVolume(0.35f, 0.35f)
-                prepare()
-                start()
-            }
-        } catch (e: Exception) {
-            null
+    // ------------------------------------------------------------------ sound design
+
+    private fun boing(): FloatArray {
+        val b = Synth.buffer(0.22f)
+        var ph = 0.0
+        for (i in b.indices) {
+            val t = i.toFloat() / Synth.RATE
+            val f = 300f + 600f * (1f - exp(-t * 18f)) + 30f * sin(2 * PI * 30 * t).toFloat()
+            ph += 2 * PI * f / Synth.RATE
+            b[i] = sin(ph).toFloat() * exp(-t * 9f)
         }
+        return b
     }
 
-    fun stopMusic() {
-        music?.run {
+    private fun whoosh(len: Float): FloatArray {
+        val b = Synth.buffer(len)
+        val r = Random(11)
+        var lp = 0f
+        for (i in b.indices) {
+            val t = i.toFloat() / Synth.RATE
+            val k = t / len
+            val cutoff = 0.05f + 0.25f * sin(PI * k).toFloat()
+            lp += cutoff * ((r.nextFloat() * 2 - 1) - lp)
+            b[i] = lp * sin(PI * k).toFloat() * 2f
+        }
+        return b
+    }
+
+    private fun chime(notes: FloatArray, gap: Float): FloatArray {
+        val out = Synth.buffer(notes.size * gap + 0.35f)
+        notes.forEachIndexed { i, f -> Synth.mix(out, Synth.marimba(f, 0.35f), (i * gap * Synth.RATE).toInt(), 0.7f) }
+        return out
+    }
+
+    private fun thud(): FloatArray {
+        val out = Synth.buffer(0.35f)
+        Synth.mix(out, Synth.tom(70f), 0, 1f)
+        Synth.mix(out, Synth.vowel(260f, 180f, 0.18f, 500f, 1000f, breath = 0.2f), (0.03f * Synth.RATE).toInt(), 0.5f)
+        return out
+    }
+
+    private fun crash(): FloatArray {
+        val out = Synth.buffer(0.4f)
+        Synth.mix(out, Synth.kick(), 0, 0.8f)
+        Synth.mix(out, Synth.hat(open = true, seed = 21), 0, 0.9f)
+        Synth.mix(out, Synth.clap(8), 0, 0.6f)
+        return out
+    }
+
+    private fun sadSlide(): FloatArray {
+        val b = Synth.buffer(0.7f)
+        var ph = 0.0
+        for (i in b.indices) {
+            val t = i.toFloat() / Synth.RATE
+            val f = 520f * exp(-t * 1.6f) + 20f * sin(2 * PI * 7 * t).toFloat()
+            ph += 2 * PI * f / Synth.RATE
+            b[i] = (sin(ph).toFloat() + 0.3f * sin(ph * 2).toFloat()) * (1f - t / 0.7f)
+        }
+        return b
+    }
+
+    private fun softThump(): FloatArray {
+        val out = Synth.buffer(0.15f)
+        Synth.mix(out, Synth.conga(110f), 0, 0.8f)
+        return out
+    }
+
+    // ------------------------------------------------------------------ caching
+
+    private fun loadOrRenderMusic(dir: File): MusicSet {
+        val f = File(dir, "music.pcm")
+        if (f.exists()) {
             try {
-                stop()
-            } catch (_: IllegalStateException) {
+                DataInputStream(f.inputStream().buffered()).use { inp ->
+                    fun read(): FloatArray {
+                        val n = inp.readInt()
+                        val bytes = ByteArray(n * 2)
+                        inp.readFully(bytes)
+                        val bb = ByteBuffer.wrap(bytes).order(ByteOrder.LITTLE_ENDIAN)
+                        return FloatArray(n) { bb.short / 32767f }
+                    }
+                    return MusicSet(read(), read(), read(), read(), read(), read())
+                }
+            } catch (_: Exception) {
+                f.delete()
             }
-            release()
         }
-        music = null
-    }
-
-    fun pauseMusic() {
+        val set = Music.render()
         try {
-            music?.pause()
-        } catch (_: IllegalStateException) {
-        }
-    }
-
-    fun resumeMusic() {
-        if (!musicEnabled) return
-        if (music == null) startMusic() else try {
-            music?.start()
-        } catch (_: IllegalStateException) {
-        }
-    }
-
-    // ------------------------------------------------------------------ synthesis
-
-    private operator fun FloatArray.plus(other: FloatArray): FloatArray {
-        val out = FloatArray(size + other.size)
-        System.arraycopy(this, 0, out, 0, size)
-        System.arraycopy(other, 0, out, size, other.size)
-        return out
-    }
-
-    private fun tone(freq: Float, dur: Float, vol: Float): FloatArray {
-        val n = (RATE * dur).toInt()
-        return FloatArray(n) { i ->
-            val t = i / RATE.toFloat()
-            val env = exp(-t * 18f) * (if (i < 80) i / 80f else 1f)
-            (sin(2 * PI * freq * t).toFloat() + 0.3f * sin(4 * PI * freq * t).toFloat()) * env * vol
-        }
-    }
-
-    private fun sweep(from: Float, to: Float, dur: Float, vol: Float): FloatArray {
-        val n = (RATE * dur).toInt()
-        var phase = 0.0
-        return FloatArray(n) { i ->
-            val k = i / n.toFloat()
-            val f = from + (to - from) * k
-            phase += 2 * PI * f / RATE
-            val env = (1f - k) * (if (i < 100) i / 100f else 1f)
-            (if (sin(phase) > 0) 1f else -1f) * 0.35f * env * vol + sin(phase).toFloat() * 0.65f * env * vol
-        }
-    }
-
-    private fun noise(dur: Float, vol: Float): FloatArray {
-        val n = (RATE * dur).toInt()
-        val r = Random(7)
-        var last = 0f
-        return FloatArray(n) { i ->
-            val env = 1f - i / n.toFloat()
-            last = last * 0.6f + (r.nextFloat() * 2f - 1f) * 0.4f
-            last * env * vol
-        }
-    }
-
-    /** A simple 8-second tribal drum + marimba groove. */
-    private fun jungleLoop(): FloatArray {
-        val bpm = 120f
-        val beat = 60f / bpm
-        val bars = 4
-        val total = (RATE * beat * 4 * bars).toInt()
-        val out = FloatArray(total)
-        fun add(start: Float, data: FloatArray) {
-            val s0 = (start * RATE).toInt()
-            for (i in data.indices) {
-                val j = s0 + i
-                if (j < total) out[j] += data[i]
+            DataOutputStream(FileOutputStream(File(dir, "music.tmp")).buffered()).use { out ->
+                for (a in listOf(set.menu, set.run, set.danger, set.power, set.gameOver, set.fanfare)) {
+                    out.writeInt(a.size)
+                    val bb = ByteBuffer.allocate(a.size * 2).order(ByteOrder.LITTLE_ENDIAN)
+                    for (v in a) bb.putShort((v.coerceIn(-1f, 1f) * 32767).toInt().toShort())
+                    out.write(bb.array())
+                }
             }
+            File(dir, "music.tmp").renameTo(f)
+        } catch (_: Exception) {
         }
-        val kick = FloatArray((RATE * 0.25f).toInt()) { i ->
-            val t = i / RATE.toFloat()
-            sin(2 * PI * (110f - 60f * t * 4f) * t).toFloat() * exp(-t * 14f) * 0.8f
-        }
-        val r = Random(3)
-        val shaker = FloatArray((RATE * 0.06f).toInt()) { i -> (r.nextFloat() * 2 - 1) * exp(-i / 300f) * 0.15f }
-        val scale = floatArrayOf(392f, 440f, 523.25f, 587.33f, 659.25f, 783.99f)
-        val melody = intArrayOf(0, 2, 3, 2, 4, 3, 2, 1, 0, 2, 3, 5, 4, 3, 2, 0)
-        for (bar in 0 until bars) {
-            for (b in 0 until 4) {
-                val t = (bar * 4 + b) * beat
-                if (b == 0 || b == 2 || (b == 3 && bar % 2 == 1)) add(t, kick)
-                add(t + beat / 2f, shaker)
-                add(t + beat / 4f, shaker)
-            }
-            for (k in 0 until 4) {
-                val note = scale[melody[(bar * 4 + k) % melody.size]]
-                add((bar * 4 + k) * beat + beat * 0.5f, marimba(note))
-            }
-        }
-        return out
-    }
-
-    private fun marimba(freq: Float): FloatArray {
-        val n = (RATE * 0.4f).toInt()
-        return FloatArray(n) { i ->
-            val t = i / RATE.toFloat()
-            (sin(2 * PI * freq * t).toFloat() + 0.25f * sin(2 * PI * freq * 4 * t).toFloat()) * exp(-t * 9f) * 0.22f
-        }
+        return set
     }
 
     private fun writeWav(file: File, samples: FloatArray) {
         val data = ByteBuffer.allocate(samples.size * 2).order(ByteOrder.LITTLE_ENDIAN)
         for (s in samples) data.putShort((s.coerceIn(-1f, 1f) * 32767).toInt().toShort())
+        val rate = Synth.RATE
         val header = ByteBuffer.allocate(44).order(ByteOrder.LITTLE_ENDIAN).apply {
             put("RIFF".toByteArray()); putInt(36 + data.capacity()); put("WAVE".toByteArray())
-            put("fmt ".toByteArray()); putInt(16); putShort(1); putShort(1); putInt(RATE); putInt(RATE * 2)
+            put("fmt ".toByteArray()); putInt(16); putShort(1); putShort(1); putInt(rate); putInt(rate * 2)
             putShort(2); putShort(16)
             put("data".toByteArray()); putInt(data.capacity())
         }
@@ -246,11 +273,7 @@ class SoundManager(private val context: Context) : FeedbackSink {
     }
 
     fun release() {
-        stopMusic()
+        music.stop()
         pool.release()
-    }
-
-    companion object {
-        private const val RATE = 22050
     }
 }

@@ -19,7 +19,9 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -46,6 +48,7 @@ import com.junglerun.game.ui.components.JungleBackground
 import com.junglerun.game.ui.components.Panel
 import com.junglerun.game.ui.components.TopBar
 import com.junglerun.game.ui.components.formatNumber
+import com.junglerun.game.ui.components.isPortrait
 import com.junglerun.game.ui.theme.JungleColors
 
 @Composable
@@ -53,15 +56,19 @@ fun AnimalsScreen(container: AppContainer, activity: Activity, onBack: () -> Uni
     val profile by container.repository.profile.collectAsState()
     var focused by remember { mutableStateOf(Animals.get(profile.selected)) }
 
+    val portrait = isPortrait()
     JungleBackground {
         Column(Modifier.fillMaxSize()) {
             TopBar("Animals", profile.coins, profile.gems, onBack, onShop)
-            Row(Modifier.fillMaxSize().padding(horizontal = 16.dp, vertical = 4.dp)) {
-                // Detail panel
-                Panel(Modifier.weight(0.9f).fillMaxHeight()) {
+            val detail: @Composable (Modifier) -> Unit = { m ->
+                Panel(m) {
                     val owned = focused.id in profile.owned
-                    Box(Modifier.fillMaxWidth().weight(1f), contentAlignment = Alignment.Center) {
-                        AnimalPortrait(focused, Modifier.size(150.dp), locked = !owned)
+                    Box(
+                        (if (portrait) Modifier.height(190.dp) else Modifier.weight(1f)).fillMaxWidth(),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        AnimalPortrait(focused, Modifier.size(if (portrait) 180.dp else 150.dp), locked = !owned,
+                            mood = if (owned) com.junglerun.game.art.Mood.HAPPY else com.junglerun.game.art.Mood.NORMAL)
                     }
                     Text(focused.displayName, style = MaterialTheme.typography.titleLarge, color = Color.White)
                     Text(focused.tagline, color = Color(0xFFC8E6C9), fontSize = 13.sp)
@@ -82,10 +89,10 @@ fun AnimalsScreen(container: AppContainer, activity: Activity, onBack: () -> Uni
                     Spacer(Modifier.height(8.dp))
                     ActionButton(container, activity, focused, owned, profile.selected == focused.id, profile.coins, profile.gems)
                 }
-                Spacer(Modifier.width(12.dp))
-                // Carousel
+            }
+            val carousel: @Composable (Modifier) -> Unit = { m ->
                 LazyRow(
-                    Modifier.weight(1.4f).fillMaxHeight(),
+                    if (portrait) m.height(170.dp) else m,
                     horizontalArrangement = Arrangement.spacedBy(10.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
@@ -94,7 +101,7 @@ fun AnimalsScreen(container: AppContainer, activity: Activity, onBack: () -> Uni
                         val selected = a.id == focused.id
                         Column(
                             Modifier
-                                .width(130.dp)
+                                .width(124.dp)
                                 .clip(RoundedCornerShape(18.dp))
                                 .background(if (selected) Color(0x55FFC107) else JungleColors.Card)
                                 .border(if (selected) 3.dp else 1.dp, if (selected) JungleColors.Banana else Color(0x3366BB6A), RoundedCornerShape(18.dp))
@@ -102,8 +109,8 @@ fun AnimalsScreen(container: AppContainer, activity: Activity, onBack: () -> Uni
                                 .padding(10.dp),
                             horizontalAlignment = Alignment.CenterHorizontally,
                         ) {
-                            AnimalPortrait(a, Modifier.size(90.dp), locked = !owned, running = selected)
-                            Text(a.displayName.substringBefore(" "), color = Color.White, fontWeight = FontWeight.Bold)
+                            AnimalPortrait(a, Modifier.size(86.dp), locked = !owned, running = selected)
+                            Text(a.displayName.substringBefore(" ").removePrefix("Golden").ifEmpty { "Golden" }, color = Color.White, fontWeight = FontWeight.Bold)
                             Text(
                                 when {
                                     a.id == profile.selected -> "SELECTED"
@@ -114,6 +121,19 @@ fun AnimalsScreen(container: AppContainer, activity: Activity, onBack: () -> Uni
                             )
                         }
                     }
+                }
+            }
+            if (portrait) {
+                Column(Modifier.fillMaxSize().padding(horizontal = 16.dp).verticalScroll(rememberScrollState())) {
+                    carousel(Modifier.fillMaxWidth())
+                    Spacer(Modifier.height(10.dp))
+                    detail(Modifier.fillMaxWidth())
+                }
+            } else {
+                Row(Modifier.fillMaxSize().padding(horizontal = 16.dp, vertical = 4.dp)) {
+                    detail(Modifier.weight(0.9f).fillMaxHeight())
+                    Spacer(Modifier.width(12.dp))
+                    carousel(Modifier.weight(1.4f).fillMaxHeight())
                 }
             }
         }

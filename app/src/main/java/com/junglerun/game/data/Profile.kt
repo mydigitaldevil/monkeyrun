@@ -31,6 +31,32 @@ data class DailyChallenge(val epochDay: Long, val animalId: String, val target: 
     val done: Boolean get() = progress >= target
 }
 
+/** One finished run, kept locally and submitted to the online leaderboard. */
+data class RunRecord(
+    val id: String,
+    val time: Long,
+    val animalId: String,
+    val mode: String,
+    val score: Long,
+    val meters: Int,
+    val food: Int,
+    val durationSec: Float,
+    val multiplier: Int,
+    val won: Boolean? = null,
+) {
+    fun toJson(): JSONObject = JSONObject().put("id", id).put("time", time).put("animal", animalId).put("mode", mode)
+        .put("score", score).put("meters", meters).put("food", food).put("duration", durationSec.toDouble())
+        .put("mul", multiplier).apply { if (won != null) put("won", won) }
+
+    companion object {
+        fun fromJson(o: JSONObject) = RunRecord(
+            o.getString("id"), o.getLong("time"), o.getString("animal"), o.optString("mode", "solo"),
+            o.getLong("score"), o.getInt("meters"), o.getInt("food"), o.optDouble("duration", 0.0).toFloat(),
+            o.optInt("mul", 1), if (o.has("won")) o.getBoolean("won") else null,
+        )
+    }
+}
+
 data class Profile(
     val coins: Long = 500,
     val gems: Int = 5,
@@ -59,6 +85,17 @@ data class Profile(
     val highScores: List<Long> = emptyList(),
     val settings: Settings = Settings(),
     val firstLaunch: Boolean = true,
+    /** Anonymous id for the online leaderboard. */
+    val playerId: String = java.util.UUID.randomUUID().toString(),
+    val runHistory: List<RunRecord> = emptyList(),
+    /** Runs waiting to be uploaded to the leaderboard (offline queue). */
+    val pendingScores: List<RunRecord> = emptyList(),
+    val lastAnimal: String = "",
+    val sameAnimalStreak: Int = 0,
+    val tutorialDone: Boolean = false,
+    val lastTryPromptRun: Int = 0,
+    val league: String = "Bronze",
+    val weeklyRank: Int = 0,
 ) {
     fun level(u: Upgrade): Int = upgrades[u] ?: 0
     fun isVip(now: Long = System.currentTimeMillis()): Boolean = vipUntil > now
@@ -99,9 +136,21 @@ data class Profile(
         put("settings", JSONObject().put("sound", settings.sound).put("music", settings.music)
             .put("haptics", settings.haptics).put("name", settings.playerName))
         put("firstLaunch", firstLaunch)
+        put("playerId", playerId)
+        put("runHistory", JSONArray().apply { runHistory.forEach { put(it.toJson()) } })
+        put("pendingScores", JSONArray().apply { pendingScores.forEach { put(it.toJson()) } })
+        put("lastAnimal", lastAnimal)
+        put("sameAnimalStreak", sameAnimalStreak)
+        put("tutorialDone", tutorialDone)
+        put("lastTryPromptRun", lastTryPromptRun)
+        put("league", league)
+        put("weeklyRank", weeklyRank)
     }
 
     companion object {
+        private fun records(a: JSONArray?): List<RunRecord> =
+            if (a == null) emptyList() else (0 until a.length()).mapNotNull { runCatching { RunRecord.fromJson(a.getJSONObject(it)) }.getOrNull() }
+
         fun fromJson(o: JSONObject): Profile {
             fun strings(key: String): Set<String> {
                 val a = o.optJSONArray(key) ?: return emptySet()
@@ -157,6 +206,16 @@ data class Profile(
                     playerName = s?.optString("name", "Player") ?: "Player",
                 ),
                 firstLaunch = o.optBoolean("firstLaunch", true),
+                playerId = o.optString("playerId").ifEmpty { java.util.UUID.randomUUID().toString() },
+                runHistory = records(o.optJSONArray("runHistory")),
+                pendingScores = records(o.optJSONArray("pendingScores")),
+                lastAnimal = o.optString("lastAnimal"),
+                sameAnimalStreak = o.optInt("sameAnimalStreak"),
+                // Players who already played before this field existed skip the tutorial.
+                tutorialDone = o.optBoolean("tutorialDone", o.optInt("totalRuns") > 0),
+                lastTryPromptRun = o.optInt("lastTryPromptRun"),
+                league = o.optString("league", "Bronze"),
+                weeklyRank = o.optInt("weeklyRank"),
             )
         }
     }

@@ -44,12 +44,14 @@ import com.junglerun.game.core.Animals
 import com.junglerun.game.data.DailyRewards
 import com.junglerun.game.game.GameMode
 import com.junglerun.game.ui.Routes
-import com.junglerun.game.ui.components.AnimalPortrait
+import com.junglerun.game.ui.components.LeagueBadge
+import com.junglerun.game.ui.components.LiveScene
+import com.junglerun.game.ui.components.OutlinedTitle
+import com.junglerun.game.ui.components.isPortrait
 import com.junglerun.game.ui.components.BannerAd
 import com.junglerun.game.ui.components.CurrencyBar
 import com.junglerun.game.ui.components.FoodIcon
 import com.junglerun.game.ui.components.GameButton
-import com.junglerun.game.ui.components.JungleBackground
 import com.junglerun.game.ui.components.Panel
 import com.junglerun.game.ui.theme.JungleColors
 
@@ -58,56 +60,31 @@ fun HomeScreen(container: AppContainer, activity: Activity, onNavigate: (String)
     val profile by container.repository.profile.collectAsState()
     val animal = Animals.get(profile.selected)
     var showDaily by remember { mutableStateOf(false) }
+    val portrait = isPortrait()
 
     LaunchedEffect(Unit) {
         container.repository.refreshDailyState()
         container.ads.inGameplay = false
-        container.sound.resumeMusic()
+        container.sound.menuMusic()
+        container.syncScores()
         if (container.repository.canClaimDailyReward()) showDaily = true
     }
 
-    JungleBackground {
-        Row(Modifier.fillMaxSize().padding(horizontal = 24.dp, vertical = 12.dp)) {
-            // Left: title + hero animal
-            Column(
-                Modifier.weight(1.1f).fillMaxHeight(),
-                horizontalAlignment = Alignment.CenterHorizontally,
-            ) {
-                Text(
-                    "JUNGLE RUN",
-                    style = MaterialTheme.typography.displayLarge,
-                    color = JungleColors.Banana,
-                )
-                Text("Run • Jump • Escape the ${animal.chaser.displayName}!", color = Color(0xFFC8E6C9))
-                Box(Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.Center) {
-                    AnimalPortrait(animal, Modifier.size(220.dp))
-                }
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text(animal.displayName, style = MaterialTheme.typography.titleLarge, color = Color.White)
-                    Spacer(Modifier.width(8.dp))
-                    FoodIcon(animal.food)
-                }
-                Text(
-                    "Best ${profile.bestScore}  •  ${profile.scoreMultiplier}x multiplier",
-                    color = Color(0xFFFFF59D),
-                    fontWeight = FontWeight.Bold,
-                )
-                Spacer(Modifier.height(6.dp))
-                BannerAd(container.ads)
-            }
-
-            Spacer(Modifier.width(16.dp))
-
-            // Right: currencies + menu
-            Column(
-                Modifier.weight(1f).fillMaxHeight().verticalScroll(rememberScrollState()),
-                horizontalAlignment = Alignment.End,
-                verticalArrangement = Arrangement.spacedBy(10.dp),
-            ) {
-                CurrencyBar(profile.coins, profile.gems) { onNavigate(Routes.SHOP) }
+    Box(Modifier.fillMaxSize().background(JungleColors.DeepLeaf)) {
+        LiveScene(animal.id, Modifier.fillMaxSize())
+        // Soft scrim so menus stay readable over the live scene
+        Box(
+            Modifier.fillMaxSize().background(
+                if (portrait) Brush.verticalGradient(listOf(Color(0x99062814), Color(0x00062814), Color(0x00062814), Color(0xCC062814)))
+                else Brush.horizontalGradient(listOf(Color(0x00062814), Color(0x33062814), Color(0xCC062814))),
+            ),
+        )
+        val missionsDone = profile.missions.count { it.done }
+        val menu: @Composable (Modifier) -> Unit = { m ->
+            Column(m, verticalArrangement = Arrangement.spacedBy(10.dp)) {
                 GameButton(
                     "▶  PLAY", Modifier.fillMaxWidth(), brush = JungleColors.playButton,
-                    textColor = Color(0xFF3E2723), height = 64.dp, pulse = true,
+                    textColor = Color(0xFF3E2723), height = 66.dp, pulse = true,
                 ) { onNavigate(Routes.game(GameMode.SOLO)) }
                 GameButton("👥  MULTIPLAYER", Modifier.fillMaxWidth(), brush = JungleColors.blueButton) {
                     onNavigate(Routes.MULTIPLAYER)
@@ -117,26 +94,79 @@ fun HomeScreen(container: AppContainer, activity: Activity, onNavigate: (String)
                     GameButton("🛒 SHOP", Modifier.weight(1f), brush = JungleColors.purpleButton) { onNavigate(Routes.SHOP) }
                 }
                 Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                    val missionsDone = profile.missions.count { it.done }
-                    GameButton("🎯 MISSIONS $missionsDone/3", Modifier.weight(1f)) { onNavigate(Routes.MISSIONS) }
-                    GameButton("⚙", Modifier.width(64.dp), brush = JungleColors.greenButton) { onNavigate(Routes.SETTINGS) }
-                }
-                profile.daily?.let { d ->
-                    val target = Animals.get(d.animalId)
-                    Panel(Modifier.fillMaxWidth().clickable { onNavigate(Routes.MISSIONS) }) {
-                        Text("TODAY'S CHALLENGE", color = JungleColors.Banana, fontWeight = FontWeight.Black, fontSize = 13.sp)
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Text(
-                                "Run as ${target.displayName} and eat ${d.target} ${target.food.displayName.lowercase()}",
-                                color = Color.White, modifier = Modifier.weight(1f),
-                            )
-                            FoodIcon(target.food)
-                        }
-                        Text(
-                            if (d.claimed) "Claimed ✓" else "${d.progress}/${d.target} • Reward 500 coins + 5 gems",
-                            color = Color(0xFFA5D6A7), fontSize = 12.sp,
-                        )
+                    GameButton("🎯 $missionsDone/3", Modifier.weight(1f)) { onNavigate(Routes.MISSIONS) }
+                    GameButton("🏆 RANKS", Modifier.weight(1f), brush = JungleColors.playButton, textColor = Color(0xFF3E2723)) {
+                        onNavigate(Routes.LEADERBOARD)
                     }
+                }
+            }
+        }
+        val title: @Composable (Modifier) -> Unit = { m ->
+            Column(m, horizontalAlignment = if (portrait) Alignment.CenterHorizontally else Alignment.Start) {
+                OutlinedTitle("JUNGLE RUN", if (portrait) 46.sp else 54.sp)
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    LeagueBadge(profile.league, rank = profile.weeklyRank)
+                    Spacer(Modifier.width(8.dp))
+                    Text("Best ${profile.bestScore} • ${profile.scoreMultiplier}x", color = Color.White, fontWeight = FontWeight.Bold)
+                }
+                Spacer(Modifier.height(6.dp))
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(animal.displayName, color = JungleColors.Banana, fontWeight = FontWeight.Black)
+                    Spacer(Modifier.width(6.dp))
+                    FoodIcon(animal.food)
+                    Text("  vs ${animal.chaser.displayName}", color = Color(0xFFFFCC80), fontWeight = FontWeight.Bold)
+                }
+            }
+        }
+        val daily: @Composable (Modifier) -> Unit = { m ->
+            profile.daily?.let { d ->
+                val target = Animals.get(d.animalId)
+                Panel(m.clickable { onNavigate(Routes.MISSIONS) }) {
+                    Text("TODAY'S CHALLENGE", color = JungleColors.Banana, fontWeight = FontWeight.Black, fontSize = 12.sp)
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text("Run as ${target.displayName.substringBefore(" ")}, eat ${d.target}", color = Color.White,
+                            modifier = Modifier.weight(1f), fontSize = 13.sp)
+                        FoodIcon(target.food)
+                    }
+                    Text(if (d.claimed) "Claimed ✓" else "${d.progress}/${d.target} • 500 coins + 5 gems", color = Color(0xFFA5D6A7), fontSize = 11.sp)
+                }
+            }
+        }
+
+        if (portrait) {
+            Column(Modifier.fillMaxSize().padding(16.dp)) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    IconCircle("⚙") { onNavigate(Routes.SETTINGS) }
+                    Spacer(Modifier.weight(1f))
+                    CurrencyBar(profile.coins, profile.gems) { onNavigate(Routes.SHOP) }
+                }
+                Spacer(Modifier.height(10.dp))
+                title(Modifier.fillMaxWidth())
+                Spacer(Modifier.weight(1f))
+                daily(Modifier.fillMaxWidth())
+                Spacer(Modifier.height(10.dp))
+                menu(Modifier.fillMaxWidth())
+                Spacer(Modifier.height(8.dp))
+                BannerAd(container.ads, Modifier.align(Alignment.CenterHorizontally))
+            }
+        } else {
+            Row(Modifier.fillMaxSize().padding(horizontal = 24.dp, vertical = 14.dp)) {
+                Column(Modifier.weight(1.2f).fillMaxHeight()) {
+                    title(Modifier)
+                    Spacer(Modifier.weight(1f))
+                    BannerAd(container.ads)
+                }
+                Spacer(Modifier.width(16.dp))
+                Column(Modifier.weight(0.9f).fillMaxHeight().verticalScroll(rememberScrollState()), horizontalAlignment = Alignment.End) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        CurrencyBar(profile.coins, profile.gems) { onNavigate(Routes.SHOP) }
+                        Spacer(Modifier.width(8.dp))
+                        IconCircle("⚙") { onNavigate(Routes.SETTINGS) }
+                    }
+                    Spacer(Modifier.height(10.dp))
+                    daily(Modifier.fillMaxWidth())
+                    Spacer(Modifier.height(10.dp))
+                    menu(Modifier.fillMaxWidth())
                 }
             }
         }
@@ -145,6 +175,14 @@ fun HomeScreen(container: AppContainer, activity: Activity, onNavigate: (String)
     if (showDaily) {
         DailyRewardDialog(container, activity, profile.rewardStreak, profile.lastRewardDay) { showDaily = false }
     }
+}
+
+@Composable
+private fun IconCircle(icon: String, onClick: () -> Unit) {
+    Box(
+        Modifier.size(40.dp).clip(RoundedCornerShape(50)).background(Color(0x66000000)).clickable(onClick = onClick),
+        contentAlignment = Alignment.Center,
+    ) { Text(icon, color = Color.White, fontSize = 20.sp) }
 }
 
 @Composable

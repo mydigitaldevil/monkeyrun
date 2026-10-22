@@ -12,6 +12,7 @@ import com.junglerun.game.game.GameMode
 import com.junglerun.game.ui.screens.AnimalsScreen
 import com.junglerun.game.ui.screens.GameScreen
 import com.junglerun.game.ui.screens.HomeScreen
+import com.junglerun.game.ui.screens.LeaderboardScreen
 import com.junglerun.game.ui.screens.LobbyScreen
 import com.junglerun.game.ui.screens.MissionsScreen
 import com.junglerun.game.ui.screens.MultiplayerScreen
@@ -26,9 +27,13 @@ object Routes {
     const val SETTINGS = "settings"
     const val MULTIPLAYER = "multiplayer"
     const val LOBBY = "lobby"
-    const val GAME = "game/{mode}?p2={p2}"
+    const val LEADERBOARD = "leaderboard"
+    const val GAME = "game/{mode}?p2={p2}&trial={trial}"
 
-    fun game(mode: GameMode, p2: String? = null) = "game/${mode.name}" + (p2?.let { "?p2=$it" } ?: "")
+    fun game(mode: GameMode, p2: String? = null, trial: String? = null): String {
+        val q = listOfNotNull(p2?.let { "p2=$it" }, trial?.let { "trial=$it" })
+        return "game/${mode.name}" + if (q.isEmpty()) "" else q.joinToString("&", prefix = "?")
+    }
 }
 
 @Composable
@@ -46,6 +51,9 @@ fun JungleRunNavHost(container: AppContainer, activity: Activity) {
         }
         composable(Routes.MISSIONS) {
             MissionsScreen(container, activity, onBack = { nav.popBackStack() })
+        }
+        composable(Routes.LEADERBOARD) {
+            LeaderboardScreen(container, onBack = { nav.popBackStack() })
         }
         composable(Routes.SETTINGS) {
             SettingsScreen(container, activity, onBack = { nav.popBackStack() })
@@ -72,18 +80,30 @@ fun JungleRunNavHost(container: AppContainer, activity: Activity) {
             arguments = listOf(
                 navArgument("mode") { type = NavType.StringType },
                 navArgument("p2") { type = NavType.StringType; nullable = true; defaultValue = null },
+                navArgument("trial") { type = NavType.StringType; nullable = true; defaultValue = null },
             ),
         ) { entry ->
             val mode = GameMode.valueOf(entry.arguments?.getString("mode") ?: GameMode.SOLO.name)
+            val p2 = entry.arguments?.getString("p2")
+            val trial = entry.arguments?.getString("trial")
             GameScreen(
                 container, activity, mode,
-                p2Animal = entry.arguments?.getString("p2"),
+                p2Animal = p2,
                 onExit = { nav.popBackStack() },
                 onRestart = {
                     nav.popBackStack()
-                    nav.navigate(Routes.game(mode, entry.arguments?.getString("p2")))
+                    nav.navigate(Routes.game(mode, p2, trial))
                 },
                 onShop = { nav.navigate(Routes.SHOP) },
+                trialAnimal = trial,
+                onTrial = { id ->
+                    nav.popBackStack()
+                    nav.navigate(Routes.game(GameMode.SOLO, trial = id))
+                },
+                onAnimals = {
+                    nav.popBackStack()
+                    nav.navigate(Routes.ANIMALS)
+                },
             )
         }
     }

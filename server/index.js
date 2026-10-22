@@ -5,7 +5,10 @@
 // Client → server: {t:"create",name} | {t:"join",code,name} | {t:"quick",name} | {t:"relay",p:{...}}
 // Server → client: {t:"room",code,role} | {t:"peer_joined"} | {t:"peer_left"} | {t:"error",msg} | {t:"relay",p:{...}}
 
+const http = require("http");
+const path = require("path");
 const { WebSocketServer } = require("ws");
+const { Leaderboard } = require("./leaderboard");
 
 const PORT = Number(process.env.PORT || 8080);
 const MAX_MSG_BYTES = 4096;
@@ -56,7 +59,45 @@ function leave(ws) {
   if (quickWaiting === code) quickWaiting = null;
 }
 
-const wss = new WebSocketServer({ port: PORT, maxPayload: MAX_MSG_BYTES });
+const board = new Leaderboard(process.env.DATA_FILE || path.join(__dirname, "data", "scores.json"));
+
+// ---- HTTP API: score submission + leaderboards (same port as the WebSocket relay)
+function json(res, code, body) {
+  res.writeHead(code, { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*" });
+  res.end(JSON.stringify(body));
+}
+
+const server = http.createServer((req, res) => {
+  const url = new URL(req.url, "http://localhost");
+  if (req.method === "GET" && url.pathname === "/health") return json(res, 200, { ok: true });
+  if (req.method === "GET" && url.pathname === "/api/leaderboard") {
+    const scope = url.searchParams.get("scope") === "all" ? "all" : "week";
+    const limit = Math.min(Number(url.searchParams.get("limit")) || 50, 100);
+    return json(res, 200, board.top(scope, limit, url.searchParams.get("playerId")));
+  }
+  if (req.method === "POST" && url.pathname === "/api/scores") {
+    let body = "";
+    req.on("data", (c) => {
+      body += c;
+      if (body.length > 4096) req.destroy();
+    });
+    req.on("end", () => {
+      let s;
+      try {
+        s = JSON.parse(body);
+      } catch {
+        return json(res, 400, { ok: false, error: "bad json" });
+      }
+      const r = board.submit(s);
+      json(res, r.ok ? 200 : 422, r);
+    });
+    return;
+  }
+  json(res, 404, { ok: false, error: "not found" });
+});
+
+const wss = new WebSocketServer({ server, maxPayload: MAX_MSG_BYTES });
+server.listen(PORT);
 
 wss.on("connection", (ws) => {
   ws.isAlive = true;
@@ -126,4 +167,4 @@ setInterval(() => {
 }, 15000);
 
 console.log(`Jungle Run server listening on ws://0.0.0.0:${PORT}`);
-module.exports = { wss };
+module.exports = { wss, server, board };

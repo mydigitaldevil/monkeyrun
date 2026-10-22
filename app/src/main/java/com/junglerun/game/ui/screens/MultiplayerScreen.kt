@@ -53,6 +53,8 @@ import com.junglerun.game.ui.components.GameButton
 import com.junglerun.game.ui.components.JungleBackground
 import com.junglerun.game.ui.components.Panel
 import com.junglerun.game.ui.components.TopBar
+import com.junglerun.game.ui.components.AdaptiveRow
+import com.junglerun.game.ui.components.landscapeScroll
 import com.junglerun.game.ui.theme.JungleColors
 
 @Composable
@@ -111,12 +113,9 @@ fun MultiplayerScreen(
     JungleBackground {
         Column(Modifier.fillMaxSize()) {
             TopBar("Multiplayer", profile.coins, profile.gems, onBack)
-            Row(
-                Modifier.fillMaxSize().padding(horizontal = 16.dp, vertical = 4.dp),
-                horizontalArrangement = Arrangement.spacedBy(12.dp),
-            ) {
+            AdaptiveRow(Modifier.fillMaxSize().padding(horizontal = 16.dp, vertical = 4.dp), panels = listOf(@Composable { pm: Modifier ->
                 // 1) Same device split-screen
-                Panel(Modifier.weight(1f).fillMaxHeight().verticalScroll(rememberScrollState())) {
+                Panel(pm.landscapeScroll()) {
                     Text("SAME DEVICE", color = JungleColors.Banana, fontWeight = FontWeight.Black)
                     Text("2 players, one phone. Top half vs bottom half — tap to jump, swipe down to slide.", color = Color(0xFFC8E6C9), fontSize = 12.sp)
                     Spacer(Modifier.height(8.dp))
@@ -141,9 +140,9 @@ fun MultiplayerScreen(
                         onLocalMatch(p2)
                     }
                 }
-
+            }, @Composable { pm: Modifier ->
                 // 2) Local Wi-Fi room
-                Panel(Modifier.weight(1f).fillMaxHeight().verticalScroll(rememberScrollState())) {
+                Panel(pm.landscapeScroll()) {
                     Text("WI-FI ROOM", color = JungleColors.Banana, fontWeight = FontWeight.Black)
                     Text("Play with a friend on the same Wi-Fi or hotspot. No internet needed.", color = Color(0xFFC8E6C9), fontSize = 12.sp)
                     Spacer(Modifier.height(8.dp))
@@ -176,9 +175,9 @@ fun MultiplayerScreen(
                         }
                     }
                 }
-
+            }, @Composable { pm: Modifier ->
                 // 3) Online
-                Panel(Modifier.weight(1f).fillMaxHeight().verticalScroll(rememberScrollState())) {
+                Panel(pm.landscapeScroll()) {
                     Text("ONLINE", color = JungleColors.Banana, fontWeight = FontWeight.Black)
                     Text("Race anyone over the internet, or a friend with a private room code.", color = Color(0xFFC8E6C9), fontSize = 12.sp)
                     Spacer(Modifier.height(8.dp))
@@ -201,7 +200,7 @@ fun MultiplayerScreen(
                         online(OnlineAction.JOIN, onlineCode)
                     }
                 }
-            }
+            }))
         }
     }
 }
